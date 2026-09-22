@@ -125,6 +125,14 @@ assert(strcmp(madeString, '日本語'));
 assert(isequal(madeLogical, logical([1 0; 0 1])));
 assert(isequal(madeCell, {42}));
 assert(isequal(madeSparse, sparse([5 0; 0 6])));
+[madeLogicalSparse, mutatedSparse, linearIndex, complexSparse, charMatrix, emptySparse, emptyLogicalSparse] = matrust_integration(15, 3, sparse([1 0; 0 2]));
+assert(isequal(madeLogicalSparse, sparse(logical(eye(2)))));
+assert(isequal(mutatedSparse, sparse([5 0; 0 9])));
+assert(linearIndex == 3); % zero-based linear index for zero-based [1, 1]
+assert(isequal(complexSparse, sparse([1+2i 0; 0 7+4i])));
+assert(isequal(charMatrix, ['ab'; 'c ']));
+assert(isequal(size(emptySparse), [0 3]) && issparse(emptySparse));
+assert(isequal(size(emptyLogicalSparse), [0 3]) && issparse(emptyLogicalSparse) && islogical(emptyLogicalSparse));
 fprintf('MATRUST_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace\n', checks);
 end
 

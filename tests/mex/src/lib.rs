@@ -1,5 +1,5 @@
 use matrust::{
-    Error, ErrorKind, Inputs, MatFile, MatVersion, Matlab, OpenMode, Outputs, Result,
+    Complex, Error, ErrorKind, Inputs, MatFile, MatVersion, Matlab, OpenMode, Outputs, Result,
     VariableInfos, Variables, Workspace,
 };
 use std::ffi::CString;
@@ -159,6 +159,56 @@ fn run<'mex>(
             outputs.set(3, cell)?;
             outputs.set(4, sparse)?;
         }
+        15 => {
+            let input = inputs.get(2).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    "sparse access",
+                    "one sparse input required",
+                )
+            })?;
+            if input.sparse_data::<f64>()? != [1.0, 2.0] || input.linear_index(&[1, 1])? != 3 {
+                return Err(Error::new(
+                    ErrorKind::Native,
+                    "sparse access",
+                    "unexpected sparse contents or indexing",
+                ));
+            }
+            let logical = cx.logical_sparse(2, 2, &[0, 1, 2], &[0, 1], &[true, true])?;
+            if logical.as_ref().sparse_logicals()? != [true, true] {
+                return Err(Error::new(
+                    ErrorKind::Native,
+                    "logical sparse access",
+                    "unexpected logical sparse contents",
+                ));
+            }
+            let mut numeric = cx.sparse(2, 2, &[0, 1, 2], &[0, 1], &[5.0, 6.0])?;
+            numeric.as_mut().sparse_data_mut::<f64>()?[1] = 9.0;
+            let mut complex = cx.sparse(
+                2,
+                2,
+                &[0, 1, 2],
+                &[0, 1],
+                &[
+                    Complex {
+                        real: 1.0,
+                        imag: 2.0,
+                    },
+                    Complex {
+                        real: 3.0,
+                        imag: 4.0,
+                    },
+                ],
+            )?;
+            complex.as_mut().sparse_data_mut::<Complex<f64>>()?[1].real = 7.0;
+            outputs.set(0, logical)?;
+            outputs.set(1, numeric)?;
+            outputs.set(2, cx.scalar(input.linear_index(&[1, 1])? as f64)?)?;
+            outputs.set(3, complex)?;
+            outputs.set(4, cx.char_matrix(&["ab", "c"])?)?;
+            outputs.set(5, cx.sparse::<f64>(0, 3, &[0, 0, 0, 0], &[], &[])?)?;
+            outputs.set(6, cx.logical_sparse(0, 3, &[0, 0, 0, 0], &[], &[])?)?;
+        }
         _ => {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -167,7 +217,7 @@ fn run<'mex>(
             ))
         }
     }
-    if !outputs.is_empty() && !matches!(command, 2 | 5 | 9 | 14) {
+    if !outputs.is_empty() && !matches!(command, 2 | 5 | 9 | 14 | 15) {
         outputs.set(0, cx.scalar(0.0)?)?;
     }
     Ok(())

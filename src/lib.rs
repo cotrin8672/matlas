@@ -4,12 +4,14 @@
 //! Rust, [`ArrayRef`] is a read-only borrow, and [`WorkspaceRef`] is a borrow of
 //! MATLAB workspace memory that also prevents calls which may invalidate it.
 
+#![deny(missing_docs)]
+
 #[doc(hidden)]
 #[path = "entrypoint.rs"]
 pub mod __private;
 mod array;
 mod error;
-#[allow(dead_code)]
+#[allow(dead_code, missing_docs)]
 mod ffi;
 #[allow(dead_code)]
 mod runtime;
@@ -19,6 +21,11 @@ pub use array::{
     UninitNumeric,
 };
 pub use error::{Error, ErrorKind, MatError, Result};
+
+/// Function-by-function coverage of the R2025a API-800 C headers.
+#[doc = include_str!("../docs/API_COVERAGE.md")]
+pub mod api_coverage {}
+
 use std::{
     ffi::{c_char, c_void, CStr, CString},
     marker::PhantomData,
@@ -27,21 +34,27 @@ use std::{
     rc::Rc,
 };
 
+/// Return MATLAB's floating-point epsilon constant.
 pub fn eps() -> f64 {
     unsafe { ffi::matrust_eps() }
 }
+/// Return MATLAB's positive infinity constant.
 pub fn inf() -> f64 {
     unsafe { ffi::matrust_inf() }
 }
+/// Return MATLAB's quiet NaN constant.
 pub fn nan() -> f64 {
     unsafe { ffi::matrust_nan() }
 }
+/// Test a floating-point value with MATLAB's finite predicate.
 pub fn is_finite(value: f64) -> bool {
     unsafe { ffi::matrust_is_finite(value) != 0 }
 }
+/// Test a floating-point value with MATLAB's infinity predicate.
 pub fn is_inf(value: f64) -> bool {
     unsafe { ffi::matrust_is_inf(value) != 0 }
 }
+/// Test a floating-point value with MATLAB's NaN predicate.
 pub fn is_nan(value: f64) -> bool {
     unsafe { ffi::matrust_is_nan(value) != 0 }
 }
@@ -55,18 +68,23 @@ pub struct MxBuffer<'mex> {
     _thread: PhantomData<Rc<()>>,
 }
 impl MxBuffer<'_> {
+    /// Return the allocation length in bytes.
     pub fn len(&self) -> usize {
         self.len
     }
+    /// Test whether the allocation has zero logical length.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+    /// Borrow the allocation as bytes.
     pub fn as_bytes(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.raw.as_ptr(), self.len) }
     }
+    /// Mutably borrow the allocation as bytes.
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.raw.as_ptr(), self.len) }
     }
+    /// Resize the allocation with `mxRealloc`.
     pub fn resize(&mut self, len: usize) -> Result<()> {
         let raw = unsafe { ffi::matrust_realloc(self.raw.as_ptr().cast(), len.max(1)) };
         self.raw = NonNull::new(raw.cast())
@@ -104,10 +122,12 @@ impl<'mex> Matlab<'mex> {
         Self::new()
     }
 
+    /// Return the name by which MATLAB invoked the current MEX function.
     pub fn function_name(&self) -> &CStr {
         unsafe { CStr::from_ptr(ffi::matrust_function_name()) }
     }
 
+    /// Print literal UTF-8 text to MATLAB's command window.
     pub fn printf(&mut self, text: &str) -> Result<()> {
         let text = CString::new(text)
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "printf", "text contains NUL"))?;
@@ -117,6 +137,7 @@ impl<'mex> Matlab<'mex> {
             .ok_or_else(|| Error::native_status("printf", status))
     }
 
+    /// Issue a MATLAB warning with an identifier and literal message.
     pub fn warning(&mut self, id: &CStr, text: &str) -> Result<()> {
         let text = CString::new(text)
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "warning", "text contains NUL"))?;
@@ -124,6 +145,7 @@ impl<'mex> Matlab<'mex> {
         Ok(())
     }
 
+    /// Allocate zeroed MATLAB-managed memory.
     pub fn calloc(&self, len: usize) -> Result<MxBuffer<'mex>> {
         let bytes = if len == 0 { 1 } else { len };
         let raw = unsafe { ffi::matrust_calloc(1, bytes) };
@@ -137,16 +159,20 @@ impl<'mex> Matlab<'mex> {
         })
     }
 
+    /// Prevent MATLAB from clearing the current MEX module.
     pub fn lock(&mut self) {
         unsafe { ffi::matrust_lock() }
     }
+    /// Release one MEX module lock.
     pub fn unlock(&mut self) {
         unsafe { ffi::matrust_unlock() }
     }
+    /// Test whether the current MEX module is locked.
     pub fn is_locked(&self) -> bool {
         unsafe { ffi::matrust_is_locked() != 0 }
     }
 
+    /// Copy a variable from a MATLAB workspace into a Rust-owned array.
     pub fn workspace_get(&mut self, space: Workspace, name: &CStr) -> Result<OwnedArray<'mex>> {
         let raw = unsafe { ffi::matrust_workspace_get(space.as_ptr(), name.as_ptr()) };
         NonNull::new(raw)
@@ -160,6 +186,10 @@ impl<'mex> Matlab<'mex> {
             })
     }
 
+    /// Borrow a MATLAB-owned workspace variable.
+    ///
+    /// The mutable context borrow prevents callbacks and workspace mutations
+    /// while the returned pointer may be invalidated by MATLAB.
     pub fn workspace_borrow<'a>(
         &'a mut self,
         space: Workspace,
@@ -180,6 +210,7 @@ impl<'mex> Matlab<'mex> {
         })
     }
 
+    /// Copy a borrowed array into a MATLAB workspace.
     pub fn workspace_put(
         &mut self,
         space: Workspace,
@@ -196,6 +227,7 @@ impl<'mex> Matlab<'mex> {
         }
     }
 
+    /// Call a MATLAB function through the trapping API.
     pub fn call(
         &mut self,
         name: &CStr,
@@ -203,6 +235,13 @@ impl<'mex> Matlab<'mex> {
         output_count: usize,
     ) -> Result<Vec<OwnedArray<'mex>>> {
         runtime::require_unborrowed("call MATLAB")?;
+        if output_count > 50 || inputs.len() > 50 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "call MATLAB",
+                "MATLAB callbacks support at most 50 inputs and 50 outputs",
+            ));
+        }
         let count = i32::try_from(output_count)
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "call MATLAB", "too many outputs"))?;
         let mut outputs = vec![std::ptr::null_mut(); output_count];
@@ -232,20 +271,27 @@ impl<'mex> Matlab<'mex> {
                 format!("{name:?} failed"),
             ));
         }
+        if outputs.iter().any(|raw| raw.is_null()) {
+            for raw in outputs {
+                if !raw.is_null() {
+                    unsafe { ffi::matrust_array_destroy(raw) }
+                }
+            }
+            return Err(Error::new(
+                ErrorKind::Callback,
+                "call MATLAB",
+                "MATLAB returned a null output",
+            ));
+        }
         let mut result = Vec::with_capacity(output_count);
         for raw in outputs {
-            let raw = NonNull::new(raw).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Callback,
-                    "call MATLAB",
-                    "MATLAB returned a null output",
-                )
-            })?;
+            let raw = NonNull::new(raw).expect("outputs were checked for null");
             result.push(unsafe { OwnedArray::from_raw(raw) });
         }
         Ok(result)
     }
 
+    /// Evaluate MATLAB source through the trapping API.
     pub fn eval(&mut self, command: &str) -> Result<()> {
         runtime::require_unborrowed("evaluate MATLAB")?;
         let command = CString::new(command).map_err(|_| {
@@ -272,8 +318,11 @@ impl<'mex> Matlab<'mex> {
 /// MATLAB's three workspace namespaces.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Workspace {
+    /// Calling function's workspace.
     Caller,
+    /// Global workspace.
     Global,
+    /// Base workspace.
     Base,
 }
 impl Workspace {
@@ -303,11 +352,13 @@ pub struct WorkspaceRef<'a> {
     _context: PhantomData<&'a mut Matlab<'a>>,
 }
 impl WorkspaceRef<'_> {
+    /// Borrow the referenced MATLAB-owned array.
     pub fn as_ref(&self) -> ArrayRef<'_> {
         unsafe { ArrayRef::from_raw(self.raw) }
     }
 }
 
+/// Read-only MEX input arguments owned by MATLAB.
 pub struct Inputs<'mex> {
     values: Vec<ArrayRef<'mex>>,
 }
@@ -315,20 +366,25 @@ impl<'mex> Inputs<'mex> {
     fn new(values: Vec<ArrayRef<'mex>>) -> Self {
         Self { values }
     }
+    /// Return the number of input arguments.
     pub fn len(&self) -> usize {
         self.values.len()
     }
+    /// Test whether there are no input arguments.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
+    /// Borrow an input argument by index.
     pub fn get(&self, index: usize) -> Option<ArrayRef<'mex>> {
         self.values.get(index).copied()
     }
+    /// Iterate over every input argument.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = ArrayRef<'mex>> + '_ {
         self.values.iter().copied()
     }
 }
 
+/// MEX output slots that accept ownership of Rust-created arrays.
 pub struct Outputs<'mex> {
     values: Vec<Option<OwnedArray<'mex>>>,
 }
@@ -338,12 +394,15 @@ impl<'mex> Outputs<'mex> {
             values: (0..count).map(|_| None).collect(),
         }
     }
+    /// Return the number of requested output slots.
     pub fn len(&self) -> usize {
         self.values.len()
     }
+    /// Test whether MATLAB requested no outputs.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
+    /// Transfer an owned array into an output slot.
     pub fn set(&mut self, index: usize, value: OwnedArray<'mex>) -> Result<()> {
         let len = self.values.len();
         let slot = self
@@ -360,6 +419,7 @@ impl<'mex> Outputs<'mex> {
         *slot = Some(value);
         Ok(())
     }
+    /// Take back an output array that was previously set.
     pub fn take(&mut self, index: usize) -> Result<Option<OwnedArray<'mex>>> {
         let len = self.values.len();
         self.values
@@ -372,16 +432,25 @@ impl<'mex> Outputs<'mex> {
 /// All creation formats accepted by `matOpen`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MatVersion {
+    /// MATLAB's default output format.
     Default,
+    /// Level-4 MAT-file format.
     V4,
+    /// Version-6 MAT-file format.
     V6,
+    /// Version-7 compressed MAT-file format.
     V7,
+    /// Version-7.3 HDF5 MAT-file format.
     V73,
 }
+/// Access mode for a MAT-file.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum OpenMode {
+    /// Open an existing file for reading.
     Read,
+    /// Open an existing file for reading and writing.
     Update,
+    /// Create or replace a file in the selected format.
     Write(MatVersion),
 }
 impl OpenMode {
@@ -398,12 +467,14 @@ impl OpenMode {
     }
 }
 
+/// Owned `MATFile` handle tied to the creating MATLAB context.
 pub struct MatFile<'mex, 'ctx> {
     raw: Option<NonNull<ffi::RawFile>>,
     mode: OpenMode,
     _context: &'ctx Matlab<'mex>,
 }
 impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
+    /// Open a MAT-file with an explicit access mode.
     pub fn open(
         context: &'ctx Matlab<'mex>,
         path: impl AsRef<Path>,
@@ -419,9 +490,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             })
             .ok_or_else(|| Error::new(ErrorKind::Open, "open MAT-file", format!("{path:?}")))
     }
+    /// Create a version-7 MAT-file.
     pub fn create(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         Self::open(context, path, OpenMode::Write(MatVersion::V7))
     }
+    /// Create a MAT-file in a selected format.
     pub fn create_with_format(
         context: &'ctx Matlab<'mex>,
         path: impl AsRef<Path>,
@@ -454,6 +527,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             Ok(())
         }
     }
+    /// Write a variable by copying a borrowed array.
     pub fn put(&mut self, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
         self.require_write()?;
         validate_name(name)?;
@@ -473,6 +547,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             ))
         }
     }
+    /// Write a variable marked as global.
     pub fn put_global(&mut self, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
         self.require_write()?;
         validate_name(name)?;
@@ -492,6 +567,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             ))
         }
     }
+    /// Read a complete variable into an owned array.
     pub fn get(&mut self, name: &CStr) -> Result<OwnedArray<'mex>> {
         self.require_read()?;
         validate_name(name)?;
@@ -509,6 +585,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
                 )
             })
     }
+    /// Read only a variable header and metadata.
     pub fn info(&mut self, name: &CStr) -> Result<ArrayInfo<'mex>> {
         self.require_read()?;
         validate_name(name)?;
@@ -529,6 +606,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
                 )
             })
     }
+    /// Delete a variable from an update-mode file.
     pub fn delete(&mut self, name: &CStr) -> Result<()> {
         self.require_write()?;
         validate_name(name)?;
@@ -546,6 +624,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             ))
         }
     }
+    /// Return every variable name in the file.
     pub fn variables(&mut self) -> Result<Vec<CString>> {
         self.require_read()?;
         let (mut count, mut code) = (0, 0);
@@ -579,9 +658,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             })
             .collect()
     }
+    /// Return the unmodified current `matGetErrno` value.
     pub fn last_error(&mut self) -> MatError {
         MatError(unsafe { ffi::matrust_mat_error(self.ptr()) })
     }
+    /// Borrow limited diagnostics from the file's underlying C stream.
     pub fn stream(&mut self) -> Option<FileStream<'_>> {
         NonNull::new(unsafe { ffi::matrust_mat_stream(self.ptr()) }).map(|raw| FileStream {
             raw,
@@ -589,6 +670,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             _thread: PhantomData,
         })
     }
+    /// Close the file and report the native close status.
     pub fn close(mut self) -> Result<()> {
         let raw = self.raw.take().expect("live MAT-file");
         let status = unsafe { ffi::matrust_mat_close(raw.as_ptr()) };
@@ -609,21 +691,26 @@ impl Drop for MatFile<'_, '_> {
     }
 }
 
+/// Restricted diagnostic view of a MAT-file's underlying C stream.
 pub struct FileStream<'a> {
     raw: NonNull<c_void>,
     _borrow: PhantomData<&'a mut ()>,
     _thread: PhantomData<Rc<()>>,
 }
 impl FileStream<'_> {
+    /// Test the stream end-of-file indicator.
     pub fn is_eof(&self) -> bool {
         unsafe { ffi::matrust_stream_eof(self.raw.as_ptr()) != 0 }
     }
+    /// Test the stream error indicator.
     pub fn has_error(&self) -> bool {
         unsafe { ffi::matrust_stream_error(self.raw.as_ptr()) != 0 }
     }
+    /// Clear the stream error and end-of-file indicators.
     pub fn clear_error(&mut self) {
         unsafe { ffi::matrust_stream_clear(self.raw.as_ptr()) }
     }
+    /// Return the current byte position.
     pub fn position(&self) -> Result<u64> {
         u64::try_from(unsafe { ffi::matrust_stream_position(self.raw.as_ptr()) }).map_err(|_| {
             Error::new(
@@ -635,34 +722,51 @@ impl FileStream<'_> {
     }
 }
 
+/// Owned metadata-only array header returned by a MAT-file info operation.
+/// It intentionally cannot become an [`ArrayRef`] because MATLAB stores
+/// non-dereferenceable sentinels in its data pointers.
+///
+/// ```compile_fail
+/// # use matrust::ArrayInfo;
+/// fn cannot_read_data(info: &ArrayInfo<'_>) {
+///     let _ = info.as_ref().data::<f64>();
+/// }
+/// ```
 pub struct ArrayInfo<'mex> {
     raw: NonNull<ffi::RawArray>,
     context: PhantomData<&'mex Matlab<'mex>>,
 }
 impl ArrayInfo<'_> {
-    pub fn as_ref(&self) -> ArrayRef<'_> {
+    fn view(&self) -> ArrayRef<'_> {
         unsafe { ArrayRef::from_raw(self.raw) }
     }
+    /// Borrow the variable dimensions.
     pub fn dimensions(&self) -> &[usize] {
-        self.as_ref().dimensions()
+        self.view().dimensions()
     }
+    /// Return the variable element count.
     pub fn numel(&self) -> usize {
-        self.as_ref().numel()
+        self.view().numel()
     }
+    /// Return the variable class.
     pub fn class(&self) -> Option<Class> {
-        self.as_ref().class()
+        self.view().class()
     }
+    /// Return the variable class name.
     pub fn class_name(&self) -> &CStr {
-        self.as_ref().class_name()
+        self.view().class_name()
     }
+    /// Test whether the variable uses sparse storage.
     pub fn is_sparse(&self) -> bool {
-        self.as_ref().is_sparse()
+        self.view().is_sparse()
     }
+    /// Test whether the variable uses complex storage.
     pub fn is_complex(&self) -> bool {
-        self.as_ref().is_complex()
+        self.view().is_complex()
     }
+    /// Test whether the variable is marked global.
     pub fn is_global(&self) -> bool {
-        self.as_ref().is_from_global_workspace()
+        self.view().is_from_global_workspace()
     }
 }
 impl Drop for ArrayInfo<'_> {
@@ -671,16 +775,21 @@ impl Drop for ArrayInfo<'_> {
     }
 }
 
+/// A MAT-file value paired with its variable name.
 pub struct Named<T> {
+    /// Variable name.
     pub name: CString,
+    /// Variable value or metadata.
     pub value: T,
 }
+/// Sequential iterator over complete variables in a MAT-file.
 pub struct Variables<'mex, 'ctx> {
     file: MatFile<'mex, 'ctx>,
     remaining: usize,
     done: bool,
 }
 impl<'mex, 'ctx> Variables<'mex, 'ctx> {
+    /// Open a file for sequential variable reading.
     pub fn open(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         let mut directory = MatFile::open(context, &path, OpenMode::Read)?;
         let remaining = directory.variables()?.len();
@@ -691,6 +800,7 @@ impl<'mex, 'ctx> Variables<'mex, 'ctx> {
             done: false,
         })
     }
+    /// Close the underlying MAT-file and report its status.
     pub fn close(self) -> Result<()> {
         self.file.close()
     }
@@ -734,12 +844,14 @@ impl<'mex, 'ctx> Iterator for Variables<'mex, 'ctx> {
     }
 }
 
+/// Sequential iterator over variable headers in a MAT-file.
 pub struct VariableInfos<'mex, 'ctx> {
     file: MatFile<'mex, 'ctx>,
     remaining: usize,
     done: bool,
 }
 impl<'mex, 'ctx> VariableInfos<'mex, 'ctx> {
+    /// Open a file for sequential metadata reading.
     pub fn open(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         let mut directory = MatFile::open(context, &path, OpenMode::Read)?;
         let remaining = directory.variables()?.len();
@@ -750,6 +862,7 @@ impl<'mex, 'ctx> VariableInfos<'mex, 'ctx> {
             done: false,
         })
     }
+    /// Close the underlying MAT-file and report its status.
     pub fn close(self) -> Result<()> {
         self.file.close()
     }
@@ -852,8 +965,12 @@ macro_rules! mex_entrypoint {
 #[doc(hidden)]
 pub use ffi::RawArray;
 
-/// The deliberately unsafe escape hatch for APIs not yet modeled by the
-/// ownership layer. Safe applications should prefer the types above.
+/// Unsafe one-to-one escape hatches for published API-800 operations.
+///
+/// The safe types above cover ordinary use. This module also exposes pointer
+/// adoption, non-trapping callbacks, and MATLAB error functions that cannot be
+/// made safe without caller-provided invariants. See [`crate::api_coverage`].
+#[allow(missing_docs)]
 pub mod raw {
     pub use crate::ffi::*;
 }

@@ -17,7 +17,8 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
   or explicitly removing the key releases the MATLAB array; the MEX exit hook
   is a final cleanup path.
 - `ArrayInfo<'mex>` owns metadata returned by `matGetVariableInfo` but exposes
-  no conversion to a full data array.
+  no public conversion to `ArrayRef`, because MATLAB fills its data pointers
+  with non-dereferenceable sentinels.
 
 The `Matlab<'mex>` brand is invariant and thread-bound. MEX entrypoints create
 it internally; `Matlab::attach` is unsafe for standalone/manual integration.

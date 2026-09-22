@@ -42,6 +42,110 @@ extern "C" {
     pub fn matrust_array_data(value: *const RawArray) -> *mut c_void;
     pub fn matrust_array_chars(value: *const RawArray) -> *const u16;
     pub fn matrust_array_logicals(value: *const RawArray) -> *const u8;
+    pub fn matrust_mx_calc_single_subscript(
+        value: *const RawArray,
+        count: usize,
+        subscripts: *const usize,
+    ) -> usize;
+    pub fn matrust_mx_create_cell_matrix(m: usize, n: usize) -> *mut RawArray;
+    pub fn matrust_mx_create_char_matrix_from_strings(
+        m: usize,
+        strings: *const *const c_char,
+    ) -> *mut RawArray;
+    pub fn matrust_mx_create_double_matrix(m: usize, n: usize, complex: c_int) -> *mut RawArray;
+    pub fn matrust_mx_create_double_scalar(value: f64) -> *mut RawArray;
+    pub fn matrust_mx_create_logical_matrix(m: usize, n: usize) -> *mut RawArray;
+    pub fn matrust_mx_create_logical_scalar(value: c_int) -> *mut RawArray;
+    pub fn matrust_mx_create_numeric_matrix(
+        m: usize,
+        n: usize,
+        class_id: c_int,
+        complex: c_int,
+    ) -> *mut RawArray;
+    pub fn matrust_mx_create_struct_matrix(
+        m: usize,
+        n: usize,
+        fields: c_int,
+        names: *const *const c_char,
+    ) -> *mut RawArray;
+    pub fn matrust_mx_create_uninit_numeric_matrix(
+        m: usize,
+        n: usize,
+        class_id: c_int,
+        complex: c_int,
+    ) -> *mut RawArray;
+    pub fn matrust_mx_get_doubles(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_doubles(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_singles(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_singles(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_int8s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_int8s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_uint8s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_uint8s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_int16s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_int16s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_uint16s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_uint16s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_int32s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_int32s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_uint32s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_uint32s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_int64s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_int64s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_uint64s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_complex_uint64s(value: *const RawArray) -> *mut c_void;
+    pub fn matrust_mx_get_pr(value: *const RawArray) -> *mut f64;
+    pub fn matrust_mx_get_field(
+        value: *const RawArray,
+        index: usize,
+        name: *const c_char,
+    ) -> *mut RawArray;
+    pub fn matrust_mx_is_double(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_single(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_int8(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_uint8(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_int16(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_uint16(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_int32(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_uint32(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_int64(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_uint64(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_logical_scalar(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_is_logical_scalar_true(value: *const RawArray) -> c_int;
+    pub fn matrust_mx_set_class_name(value: *mut RawArray, name: *const c_char) -> c_int;
+    pub fn matrust_mx_set_data(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_doubles(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_doubles(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_singles(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_singles(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_int8s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_int8s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_uint8s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_uint8s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_int16s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_int16s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_uint16s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_uint16s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_int32s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_int32s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_uint32s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_uint32s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_int64s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_int64s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_uint64s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_complex_uint64s(value: *mut RawArray, data: *mut c_void);
+    pub fn matrust_mx_set_field(
+        value: *mut RawArray,
+        index: usize,
+        name: *const c_char,
+        child: *mut RawArray,
+    );
+    pub fn matrust_mx_set_ir(value: *mut RawArray, data: *mut usize);
+    pub fn matrust_mx_set_jc(value: *mut RawArray, data: *mut usize);
+    pub fn matrust_mx_set_m(value: *mut RawArray, rows: usize);
+    pub fn matrust_mx_set_n(value: *mut RawArray, columns: usize);
+    pub fn matrust_mx_set_nzmax(value: *mut RawArray, nzmax: usize);
+    pub fn matrust_mx_set_pr(value: *mut RawArray, data: *mut f64);
     pub fn matrust_create_numeric(
         ndims: usize,
         dims: *const usize,
@@ -117,6 +221,24 @@ extern "C" {
         name: *const c_char,
     ) -> *mut RawArray;
     pub fn matrust_eval_with_trap(command: *const c_char) -> *mut RawArray;
+    pub fn matrust_mex_call(
+        nlhs: c_int,
+        plhs: *mut *mut RawArray,
+        nrhs: c_int,
+        prhs: *mut *mut RawArray,
+        name: *const c_char,
+    ) -> c_int;
+    pub fn matrust_mex_eval(command: *const c_char) -> c_int;
+    pub fn matrust_mex_error(id: *const c_char, text: *const c_char);
+    pub fn matrust_mex_error_text(text: *const c_char);
+    pub fn matrust_mex_warning_text(text: *const c_char);
+    pub fn matrust_mex_print_assertion(
+        test: *const c_char,
+        file: *const c_char,
+        line: c_int,
+        message: *const c_char,
+    );
+    pub fn matrust_mex_is_global(value: *const RawArray) -> c_int;
     pub fn matrust_workspace_get(space: *const c_char, name: *const c_char) -> *mut RawArray;
     pub fn matrust_workspace_borrow(space: *const c_char, name: *const c_char) -> *const RawArray;
     pub fn matrust_workspace_put(
@@ -146,7 +268,7 @@ extern "C" {
 
     pub fn matrust_mat_open(path: *const c_char, mode: *const c_char) -> *mut RawFile;
     #[link_name = "matrust_mat_close"]
-    fn native_mat_close(file: *mut RawFile) -> c_int;
+    pub fn matrust_mat_close_raw(file: *mut RawFile) -> c_int;
     pub fn matrust_mat_error(file: *mut RawFile) -> c_int;
     pub fn matrust_mat_put(
         file: *mut RawFile,
@@ -197,7 +319,7 @@ pub(crate) unsafe fn matrust_mat_close(file: *mut RawFile) -> c_int {
     }) {
         return status;
     }
-    unsafe { native_mat_close(file) }
+    unsafe { matrust_mat_close_raw(file) }
 }
 
 #[cfg(test)]

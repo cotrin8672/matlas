@@ -194,5 +194,5 @@ unsafe extern "C" fn at_exit() {
 }
 
 pub(crate) fn module_id() -> usize {
-    at_exit as usize
+    at_exit as *const () as usize
 }

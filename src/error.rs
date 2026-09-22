@@ -8,33 +8,53 @@ pub struct MatError(pub i32);
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorKind {
+    /// An argument violates the Rust API contract.
     InvalidInput,
+    /// An array has the wrong MATLAB class or storage layout.
     Type,
+    /// An index, dimension, or allocation size is out of bounds.
     Bounds,
+    /// MATLAB could not allocate memory.
     Allocation,
+    /// A trapped MATLAB callback failed.
     Callback,
+    /// A workspace lookup or update failed.
     Workspace,
+    /// The runtime cannot perform the operation while a borrow is active.
     Busy,
+    /// A MAT-file mode does not support the requested operation.
     InvalidMode,
+    /// Opening or creating a MAT-file failed.
     Open,
+    /// Reading a MAT-file failed.
     Read,
+    /// Writing a MAT-file failed.
     Write,
+    /// Closing a MAT-file failed.
     Close,
+    /// Sequential MAT-file reading ended unexpectedly.
     UnexpectedEnd,
+    /// A native operation failed without a more specific category.
     Native,
 }
 
 /// An error that preserves the native operation and MATLAB error status.
 #[derive(Debug)]
 pub struct Error {
+    /// Stable high-level error category.
     pub kind: ErrorKind,
+    /// Operation that detected the failure.
     pub operation: &'static str,
+    /// Human-readable failure detail.
     pub detail: String,
+    /// Optional status returned by the native function.
     pub status: Option<i32>,
+    /// Optional unmodified `matGetErrno` value.
     pub mat_error: Option<MatError>,
 }
 
 impl Error {
+    /// Construct an error without a native status code.
     pub fn new(kind: ErrorKind, operation: &'static str, detail: impl Into<String>) -> Self {
         Self {
             kind,
@@ -94,6 +114,7 @@ impl Error {
         )
     }
 
+    /// Return the stable MATLAB exception identifier for this category.
     pub fn id(&self) -> &'static str {
         match self.kind {
             ErrorKind::InvalidInput => "matrust:input:invalid",
@@ -126,4 +147,5 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+/// Result type used by the safe API.
 pub type Result<T> = std::result::Result<T, Error>;

@@ -42,8 +42,12 @@ explicit persistent lifetime with generation-checked keys.
 
 The crate is being rebuilt in this repository as `matrust`; the old `rustmat`
 and `rustmex` APIs are intentionally not dependencies. Windows/R2025a is the
-first supported target. See [DESIGN.md](docs/DESIGN.md) for the ownership
-model and [VALIDATION.md](docs/VALIDATION.md) for current checks.
+first supported target. The R2025a/API-800 audit covers all 178 published C
+functions: safe operations use lifetime-aware types, aliases use a more general
+safe operation, and ownership-adopting or non-local-exit operations remain
+explicitly unsafe in `matrust::raw`. See [API_COVERAGE.md](docs/API_COVERAGE.md)
+for the function-by-function inventory, [DESIGN.md](docs/DESIGN.md) for the
+ownership model, and [VALIDATION.md](docs/VALIDATION.md) for current checks.
 
 ## License
 
