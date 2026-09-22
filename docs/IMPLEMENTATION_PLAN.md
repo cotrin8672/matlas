@@ -2,7 +2,9 @@
 
 調査日: 2026-09-22
 
-状態: 設計案。ライブラリ本体・C shim・MEX サンプルの実装は未着手。
+状態: **実装前に作成した調査・計画の記録**。その後の全 `mat.h` 対応実装で変更した判断と現在の API は [DESIGN.md](DESIGN.md)、実機検証は [VALIDATION.md](VALIDATION.md) を参照。
+
+実装での主な変更: 先送り候補だった12関数すべてを公開APIでカバーし、metadata専用型・専用逐次reader・stream診断を追加した。また、Windows実機でrustmex既存entrypointのエラー時abortを確認したため、Rustの後片付けを終えてからMATLABへエラーを渡す小さなC入口を追加した。利用側でRustからMATLAB配列を構築する場合の `alloc` feature を必須条件として明記した。以下の当初案の「独自entrypointを実装しない」等はこの判断で更新されている。
 
 リポジトリ: https://github.com/cotrin8672/rustmat
 

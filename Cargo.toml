@@ -1,0 +1,22 @@
+[package]
+name = "rustmat"
+version = "0.1.0"
+edition = "2021"
+description = "MAT-File C API with rustmex ownership and error integration"
+repository = "https://github.com/cotrin8672/rustmat"
+links = "rustmat800"
+publish = false
+
+[dependencies]
+rustmex = { version = "0.6.4", default-features = false, features = ["matlab800"] }
+
+[build-dependencies]
+cc = "1"
+
+[workspace]
+members = ["tests/mex"]
+default-members = ["."]
+resolver = "2"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]

@@ -1,0 +1,6 @@
+/target/
+/work/
+/.cargo/config.toml
+*.mexw64
+*.mexa64
+*.mexmaca64
