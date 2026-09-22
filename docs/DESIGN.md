@@ -13,15 +13,18 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
 - `WorkspaceRef<'a>` models `mexGetVariablePtr`; it borrows `&mut Matlab` and
   holds a runtime guard. Calls that may invalidate MATLAB-owned pointers are
   rejected while it is alive.
-- `PersistentArray<'mex>` owns a generation-checked persistent slot. Dropping
-  or explicitly removing the key releases the MATLAB array; the MEX exit hook
-  is a final cleanup path.
+- `PersistentArray` owns a generation-checked persistent slot and may be stored
+  between MEX invocations. Reading, mutating, or explicitly removing it
+  requires the current invocation's `Matlab<'mex>` context. Dropping it
+  releases the MATLAB array; the MEX exit hook is a final cleanup path.
 - `ArrayInfo<'mex>` owns metadata returned by `matGetVariableInfo` but exposes
   no public conversion to `ArrayRef`, because MATLAB fills its data pointers
   with non-dereferenceable sentinels.
 
 The `Matlab<'mex>` brand is invariant and thread-bound. MEX entrypoints create
 it internally; `Matlab::attach` is unsafe for standalone/manual integration.
+`Matlab::lock` returns a thread-bound `ModuleLock` guard whose destructor
+balances exactly one `mexLock`; raw manual unlock remains outside the safe API.
 
 ## Calls and errors
 

@@ -36,7 +36,7 @@ point implemented by `mex_entrypoint!`, not an API function called by users.
 | Safe | `mexCallMATLABWithTrap`, `mexEvalStringWithTrap` | `Matlab::call`, `Matlab::eval` |
 | Safe | `mexGetVariable`, `mexGetVariablePtr`, `mexPutVariable` | `Matlab::workspace_get`, `workspace_borrow`, `workspace_put` |
 | Safe | `mexFunctionName`, `mexPrintf`, `mexWarnMsgIdAndTxt` | `Matlab::function_name`, `printf`, `warning` |
-| Safe | `mexLock`, `mexUnlock`, `mexIsLocked` | `Matlab::lock`, `unlock`, `is_locked` |
+| Safe | `mexLock`, `mexUnlock`, `mexIsLocked` | RAII `Matlab::lock` / `ModuleLock`, and `is_locked` |
 | Safe/internal | `mexAtExit`, `mexMakeArrayPersistent` | persistent-array registry |
 | Raw | `mexMakeMemoryPersistent` | persisting arbitrary memory across invocations requires an application-specific owner and cleanup policy |
 | Raw | `mexCallMATLAB`, `mexEvalString` | `raw::matrust_mex_call`, `raw::matrust_mex_eval`; non-trapping callbacks may skip Rust cleanup |
@@ -72,7 +72,7 @@ point implemented by `mex_entrypoint!`, not an API function called by users.
 | Safe | `mxGetCell`, `mxSetCell` | borrowed `cell`/`cell_mut` and ownership-transferring `replace_cell` |
 | Safe | `mxGetNumberOfFields`, `mxGetFieldNameByNumber`, `mxGetFieldNumber`, `mxGetFieldByNumber`, `mxAddField`, `mxRemoveField`, `mxSetFieldByNumber` | safe struct access and replacement methods |
 | Alias | `mxGetField`, `mxSetField` | name-based `field` and `replace_field`; exact raw shims are exported |
-| Safe | `mxGetProperty`, `mxSetProperty` | `OwnedArray::property`, `ArrayMut::set_property` |
+| Safe | `mxGetProperty`, `mxSetProperty` | `Matlab::property`, `OwnedArray::property`, `ArrayMut::set_property` |
 | Safe | `mxSetDimensions`, `mxSetFromGlobalWS`, `mxSetUserBits`, `mxMakeArrayReal`, `mxMakeArrayComplex` | validated `reshape` and explicit owned-array mutation methods |
 | Raw | `mxSetM`, `mxSetN`, `mxSetClassName` | can invalidate shape/class invariants; `reshape` is the safe alternative |
 | Raw | `mxSetData`, `mxSetPr`, `mxSetDoubles`, `mxSetSingles`, `mxSetInt8s`, `mxSetUint8s`, `mxSetInt16s`, `mxSetUint16s`, `mxSetInt32s`, `mxSetUint32s`, `mxSetInt64s`, `mxSetUint64s` | pointer ownership adoption cannot be inferred by Rust |

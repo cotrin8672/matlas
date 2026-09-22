@@ -35,8 +35,9 @@ fn run<'mex>(cx: &mut Matlab<'mex>, inputs: Inputs<'mex>, out: &mut Outputs<'mex
 callback or workspace mutation cannot occur while that pointer is live.
 
 `MatFile` provides typed open/create, get, metadata, put, global put, delete,
-directory listing, and explicit close. `OwnedArray::persist` provides an
-explicit persistent lifetime with generation-checked keys.
+directory listing, and explicit close. `OwnedArray::persist` returns a
+generation-checked handle that can be kept between MEX invocations; accessing
+it again requires the new invocation's `Matlab` context.
 
 ## Status
 
@@ -47,7 +48,8 @@ functions: safe operations use lifetime-aware types, aliases use a more general
 safe operation, and ownership-adopting or non-local-exit operations remain
 explicitly unsafe in `matrust::raw`. See [API_COVERAGE.md](docs/API_COVERAGE.md)
 for the function-by-function inventory, [DESIGN.md](docs/DESIGN.md) for the
-ownership model, and [VALIDATION.md](docs/VALIDATION.md) for current checks.
+ownership model, [ERROR_HANDLING.md](docs/ERROR_HANDLING.md) for what `Result`
+can and cannot catch, and [VALIDATION.md](docs/VALIDATION.md) for current checks.
 
 ## License
 

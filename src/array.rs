@@ -101,6 +101,20 @@ pub trait Numeric: sealed::Sealed + Copy + 'static {
     const COMPLEX: bool;
 }
 
+/// A numeric element supported by MATLAB's published sparse constructor.
+///
+/// API-800 sparse numeric arrays are always real or interleaved-complex
+/// double arrays. Keeping this as a separate sealed bound makes unsupported
+/// sparse element types a compile-time error instead of a runtime failure.
+///
+/// ```compile_fail
+/// # use matrust::Matlab;
+/// fn integer_sparse(cx: &Matlab<'_>) {
+///     let _ = cx.sparse(1, 1, &[0, 1], &[0], &[1_i32]);
+/// }
+/// ```
+pub trait SparseNumeric: Numeric {}
+
 macro_rules! numeric {
     ($type:ty, $class:ident) => {
         impl sealed::Sealed for $type {}
@@ -125,6 +139,9 @@ numeric!(i32, Int32);
 numeric!(u32, Uint32);
 numeric!(i64, Int64);
 numeric!(u64, Uint64);
+
+impl SparseNumeric for f64 {}
+impl SparseNumeric for Complex<f64> {}
 
 /// A uniquely owned MATLAB array. The invariant brand prevents it from escaping
 /// the MEX invocation that created it. Drop calls `mxDestroyArray` exactly once.
@@ -160,8 +177,12 @@ impl<'mex> OwnedArray<'mex> {
     }
 
     pub(crate) fn into_raw(self) -> *mut ffi::RawArray {
+        self.into_non_null().as_ptr()
+    }
+
+    fn into_non_null(self) -> NonNull<ffi::RawArray> {
         let this = ManuallyDrop::new(self);
-        this.raw.as_ptr()
+        this.raw
     }
 
     /// Borrow the array without transferring or destroying it.
@@ -180,6 +201,10 @@ impl<'mex> OwnedArray<'mex> {
     }
 
     /// Deep-copy this array into a new Rust-owned MATLAB allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an allocation error if MATLAB cannot return a copy.
     pub fn duplicate(&self) -> Result<Self> {
         let raw = unsafe { ffi::matrust_array_duplicate(self.raw.as_ptr()) };
         let raw = NonNull::new(raw).ok_or_else(|| Error::allocation("duplicate array"))?;
@@ -187,8 +212,13 @@ impl<'mex> OwnedArray<'mex> {
     }
 
     /// Read a public object property. MATLAB returns an owned copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-object, an out-of-bounds index, an unknown
+    /// or nonpublic property, or a native allocation failure.
     pub fn property(&self, index: usize, name: &CStr) -> Result<Self> {
-        if !self.as_ref().is_object() || index >= self.as_ref().numel() {
+        if index >= self.as_ref().numel() {
             return Err(Error::bounds("get property", index, self.as_ref().numel()));
         }
         let raw = unsafe { ffi::matrust_property_get(self.raw.as_ptr(), index, name.as_ptr()) };
@@ -199,14 +229,18 @@ impl<'mex> OwnedArray<'mex> {
 
     /// Transfer ownership to MATLAB's persistent MEX storage. The returned
     /// key is the only safe way to access the value again.
-    pub fn persist(self) -> Result<PersistentArray<'mex>> {
-        let raw = self.into_raw();
-        let raw = NonNull::new(raw).expect("owned array has a pointer");
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a workspace borrow is active or the MEX cleanup
+    /// callback cannot be registered.
+    pub fn persist(self) -> Result<PersistentArray> {
+        let raw = self.into_non_null();
         match crate::runtime::persist(raw) {
             Ok((slot, generation)) => Ok(PersistentArray {
                 slot,
                 generation,
-                _brand: PhantomData,
+                active: true,
                 _thread: PhantomData,
             }),
             Err(error) => {
@@ -217,6 +251,11 @@ impl<'mex> OwnedArray<'mex> {
     }
 
     /// Change the dimensions while preserving the element count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid shape, a changed element count, a
+    /// sparse reshape, or a native dimension-allocation failure.
     pub fn reshape(&mut self, dimensions: &[usize]) -> Result<()> {
         validate_dimensions(dimensions)?;
         if self.as_ref().is_sparse() && dimensions != self.as_ref().dimensions() {
@@ -257,6 +296,10 @@ impl<'mex> OwnedArray<'mex> {
     }
 
     /// Convert a numeric array to real storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a nonnumeric array or native conversion failure.
     pub fn make_real(&mut self) -> Result<()> {
         if !self.as_ref().is_numeric() {
             return Err(Error::type_mismatch("make real", "numeric", self.as_ref()));
@@ -268,6 +311,10 @@ impl<'mex> OwnedArray<'mex> {
     }
 
     /// Convert a numeric array to interleaved complex storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a nonnumeric array or native conversion failure.
     pub fn make_complex(&mut self) -> Result<()> {
         if !self.as_ref().is_numeric() {
             return Err(Error::type_mismatch(
@@ -283,31 +330,63 @@ impl<'mex> OwnedArray<'mex> {
     }
 }
 
-/// A MATLAB-persistent array handle. Dropping the key releases the array; the
-/// registered MEX cleanup callback is a final safety net for abandoned keys.
-pub struct PersistentArray<'mex> {
+/// A MATLAB-persistent array handle that may be stored between MEX calls.
+///
+/// Access requires a live [`Matlab`] context, so the underlying pointer cannot
+/// be used outside a MEX invocation. Dropping the handle releases the array;
+/// the registered MEX cleanup callback is a final safety net for abandoned
+/// handles.
+pub struct PersistentArray {
     slot: usize,
     generation: u64,
-    _brand: PhantomData<fn(&'mex mut ()) -> &'mex mut ()>,
+    active: bool,
     _thread: PhantomData<Rc<()>>,
 }
-impl<'mex> PersistentArray<'mex> {
-    /// Borrow the persistent array if its generation is still live.
-    pub fn as_ref(&self) -> Result<ArrayRef<'_>> {
+impl PersistentArray {
+    /// Borrow the persistent array during the current MEX invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handle is stale.
+    pub fn as_ref<'a, 'mex>(&'a self, _context: &'a Matlab<'mex>) -> Result<ArrayRef<'a>> {
         let raw = crate::runtime::persistent(self.slot, self.generation)?;
         Ok(unsafe { ArrayRef::from_raw(raw) })
     }
-    /// Explicitly remove and destroy the persistent array.
-    pub fn remove(self) -> Result<()> {
-        let slot = self.slot;
-        let generation = self.generation;
-        std::mem::forget(self);
-        crate::runtime::remove_persistent(slot, generation)
+
+    /// Exclusively borrow the persistent array during the current MEX invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handle is stale.
+    pub fn as_mut<'a, 'mex>(
+        &'a mut self,
+        _context: &'a mut Matlab<'mex>,
+    ) -> Result<ArrayMut<'a, 'mex>> {
+        let raw = crate::runtime::persistent(self.slot, self.generation)?;
+        Ok(ArrayMut {
+            raw,
+            _borrow: PhantomData,
+            _brand: PhantomData,
+            _thread: PhantomData,
+        })
+    }
+
+    /// Explicitly remove and destroy the persistent array during a MEX invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handle is stale or a workspace borrow is active.
+    pub fn remove<'mex>(mut self, _context: &mut Matlab<'mex>) -> Result<()> {
+        crate::runtime::remove_persistent(self.slot, self.generation)?;
+        self.active = false;
+        Ok(())
     }
 }
-impl Drop for PersistentArray<'_> {
+impl Drop for PersistentArray {
     fn drop(&mut self) {
-        let _ = crate::runtime::remove_persistent(self.slot, self.generation);
+        if self.active {
+            let _ = crate::runtime::remove_persistent(self.slot, self.generation);
+        }
     }
 }
 
@@ -357,6 +436,11 @@ impl<'a> ArrayRef<'a> {
 
     /// Convert zero-based multidimensional subscripts to MATLAB's linear,
     /// column-major index. The number of subscripts must match the rank.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong rank, an out-of-bounds subscript, or
+    /// arithmetic overflow.
     pub fn linear_index(self, subscripts: &[usize]) -> Result<usize> {
         let dimensions = self.dimensions();
         if subscripts.len() != dimensions.len() {
@@ -445,7 +529,10 @@ impl<'a> ArrayRef<'a> {
     pub fn is_scalar(self) -> bool {
         unsafe { ffi::matrust_array_is_scalar(self.as_ptr()) != 0 }
     }
-    /// Test whether this is a MATLAB object array.
+    /// Test whether this is a legacy MATLAB v5 object array.
+    ///
+    /// Custom `classdef` objects can have dynamic class identifiers and should
+    /// be tested with [`ArrayRef::is_class`] or [`ArrayRef::class_name`].
     pub fn is_object(self) -> bool {
         unsafe { ffi::matrust_array_is_object(self.as_ptr()) != 0 }
     }
@@ -471,6 +558,10 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Convert the first dense numeric element to `f64` using MATLAB semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the array is nonempty, dense, and numeric.
     pub fn scalar(self) -> Result<f64> {
         if !self.is_numeric() || self.is_sparse() || self.is_empty() {
             return Err(Error::type_mismatch(
@@ -483,6 +574,11 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Borrow dense numeric data after checking class, complexity, and layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `T` does not match the array or the native data
+    /// pointer and length do not form a valid Rust slice.
     pub fn data<T: Numeric>(self) -> Result<&'a [T]> {
         self.check_numeric::<T>("numeric data")?;
         let raw = unsafe { ffi::matrust_array_data(self.as_ptr()) }.cast::<T>();
@@ -500,6 +596,11 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Borrow dense logical data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the array is dense logical storage with a
+    /// valid native data pointer.
     pub fn logicals(self) -> Result<&'a [bool]> {
         if !self.is_logical() || self.is_sparse() {
             return Err(Error::type_mismatch("logical data", "dense logical", self));
@@ -512,6 +613,11 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Borrow UTF-16 character data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the array is character storage with a valid
+    /// native data pointer.
     pub fn chars(self) -> Result<&'a [u16]> {
         if !self.is_char() {
             return Err(Error::type_mismatch("character data", "char", self));
@@ -524,6 +630,10 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Decode a character array as UTF-16.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-character array or unpaired UTF-16 surrogate.
     pub fn string(self) -> Result<String> {
         String::from_utf16(self.chars()?).map_err(|error| {
             Error::new(ErrorKind::InvalidInput, "decode UTF-16", error.to_string())
@@ -531,6 +641,11 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Convert a MATLAB character array to UTF-8 through MATLAB's allocator.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MATLAB cannot convert the value or returns invalid
+    /// UTF-8.
     pub fn to_utf8(self) -> Result<String> {
         let raw = unsafe { ffi::matrust_array_to_utf8(self.as_ptr()) };
         let raw = NonNull::new(raw).ok_or_else(|| {
@@ -541,13 +656,24 @@ impl<'a> ArrayRef<'a> {
             )
         })?;
         let result = unsafe { CStr::from_ptr(raw.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
+            .to_str()
+            .map(str::to_owned)
+            .map_err(|error| {
+                Error::new(
+                    ErrorKind::Native,
+                    "convert UTF-8",
+                    format!("MATLAB returned invalid UTF-8: {error}"),
+                )
+            });
         unsafe { ffi::matrust_free(raw.as_ptr().cast()) };
-        Ok(result)
+        result
     }
 
     /// Convert a MATLAB character array to the current local encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MATLAB cannot convert the value.
     pub fn to_local(self) -> Result<Vec<u8>> {
         let raw = unsafe { ffi::matrust_array_to_local(self.as_ptr()) };
         let raw = NonNull::new(raw).ok_or_else(|| {
@@ -563,6 +689,10 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Borrow a cell value, returning `None` for an empty cell.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-cell array or out-of-bounds index.
     pub fn cell(self, index: usize) -> Result<Option<ArrayRef<'a>>> {
         self.check_index("cell", index, self.is_cell())?;
         let raw = unsafe { ffi::matrust_cell_get(self.as_ptr(), index) };
@@ -570,6 +700,10 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Look up a structure field number by name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the array is not a structure.
     pub fn field_number(self, name: &CStr) -> Result<Option<usize>> {
         if !self.is_struct() {
             return Err(Error::type_mismatch("field number", "struct", self));
@@ -579,6 +713,10 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Copy all structure field names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the array is not a structure.
     pub fn field_names(self) -> Result<Vec<CString>> {
         if !self.is_struct() {
             return Err(Error::type_mismatch("field names", "struct", self));
@@ -592,6 +730,11 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Borrow a named structure field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-structure array, unknown field, or
+    /// out-of-bounds element index.
     pub fn field(self, index: usize, name: &CStr) -> Result<Option<ArrayRef<'a>>> {
         let field = self.field_number(name)?.ok_or_else(|| {
             Error::new(
@@ -604,6 +747,11 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Borrow a structure field by numeric field index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-structure array or out-of-bounds element or
+    /// field index.
     pub fn field_by_number(self, index: usize, field: usize) -> Result<Option<ArrayRef<'a>>> {
         self.check_index("field", index, self.is_struct())?;
         let fields = unsafe { ffi::matrust_struct_field_count(self.as_ptr()) } as usize;
@@ -615,6 +763,10 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Validate and borrow the compressed-column sparse indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a nonsparse array or malformed native CSC storage.
     pub fn sparse_indices(self) -> Result<SparseIndices<'a>> {
         if !self.is_sparse() {
             return Err(Error::type_mismatch("sparse indices", "sparse", self));
@@ -634,21 +786,37 @@ impl<'a> ArrayRef<'a> {
         }
         let columns = checked_slice(jc, columns, "sparse column indices")?;
         let nnz = *columns.last().unwrap_or(&0);
-        if nnz > nzmax || columns.windows(2).any(|w| w[0] > w[1]) {
+        if columns.first() != Some(&0) || nnz > nzmax || columns.windows(2).any(|w| w[0] > w[1]) {
             return Err(Error::new(
                 ErrorKind::Native,
                 "sparse indices",
                 "invalid compressed-column structure",
             ));
         }
-        Ok(SparseIndices {
-            rows: checked_slice(ir, nnz, "sparse row indices")?,
-            columns,
-        })
+        let rows = checked_slice(ir, nnz, "sparse row indices")?;
+        if rows.iter().any(|&row| row >= self.rows())
+            || columns.windows(2).any(|range| {
+                rows[range[0]..range[1]]
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+            })
+        {
+            return Err(Error::new(
+                ErrorKind::Native,
+                "sparse indices",
+                "row indices are not sorted, unique, and in bounds",
+            ));
+        }
+        Ok(SparseIndices { rows, columns })
     }
 
     /// Borrow the stored nonzero values of a sparse numeric array.
-    pub fn sparse_data<T: Numeric>(self) -> Result<&'a [T]> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `T` does not match the sparse array or its CSC/data
+    /// storage is malformed.
+    pub fn sparse_data<T: SparseNumeric>(self) -> Result<&'a [T]> {
         if !self.is_sparse()
             || self.class() != Some(T::CLASS)
             || self.is_complex() != T::COMPLEX
@@ -666,6 +834,11 @@ impl<'a> ArrayRef<'a> {
     }
 
     /// Borrow the stored true values of a sparse logical array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the array is sparse logical storage with valid
+    /// CSC/data pointers.
     pub fn sparse_logicals(self) -> Result<&'a [bool]> {
         if !self.is_sparse() || !self.is_logical() {
             return Err(Error::type_mismatch(
@@ -712,6 +885,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Mutably borrow dense numeric data after validating its layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `T` does not match the array or the native data
+    /// pointer and length do not form a valid Rust slice.
     pub fn data_mut<T: Numeric>(&mut self) -> Result<&mut [T]> {
         self.as_ref().check_numeric::<T>("mutable numeric data")?;
         let count = self.as_ref().numel();
@@ -730,6 +908,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Mutably borrow dense logical data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the array is dense logical storage with a
+    /// valid native data pointer.
     pub fn logicals_mut(&mut self) -> Result<&mut [bool]> {
         if !self.as_ref().is_logical() || self.as_ref().is_sparse() {
             return Err(Error::type_mismatch(
@@ -756,6 +939,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Mutably borrow UTF-16 character data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the array is character storage with a valid
+    /// native data pointer.
     pub fn chars_mut(&mut self) -> Result<&mut [u16]> {
         if !self.as_ref().is_char() {
             return Err(Error::type_mismatch(
@@ -780,7 +968,12 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Mutably borrow the stored nonzero values of a sparse numeric array.
-    pub fn sparse_data_mut<T: Numeric>(&mut self) -> Result<&mut [T]> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `T` does not match the sparse array or its CSC/data
+    /// storage is malformed.
+    pub fn sparse_data_mut<T: SparseNumeric>(&mut self) -> Result<&mut [T]> {
         let value = self.as_ref();
         if !value.is_sparse()
             || value.class() != Some(T::CLASS)
@@ -799,6 +992,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Mutably borrow the stored true values of a sparse logical array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the array is sparse logical storage with valid
+    /// CSC/data pointers.
     pub fn sparse_logicals_mut(&mut self) -> Result<&mut [bool]> {
         let value = self.as_ref();
         if !value.is_sparse() || !value.is_logical() {
@@ -816,11 +1014,19 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Borrow a cell value from this array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-cell array or out-of-bounds index.
     pub fn cell(&self, index: usize) -> Result<Option<ArrayRef<'_>>> {
         self.as_ref().cell(index)
     }
 
     /// Exclusively borrow a cell value, if present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-cell array or out-of-bounds index.
     pub fn cell_mut(&mut self, index: usize) -> Result<Option<ArrayMut<'_, 'mex>>> {
         self.as_ref()
             .check_index("cell", index, self.as_ref().is_cell())?;
@@ -834,6 +1040,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Replace a cell, consuming the new owner and returning the previous owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-cell array or out-of-bounds index. Ownership
+    /// is not transferred when validation fails.
     pub fn replace_cell(
         &mut self,
         index: usize,
@@ -848,6 +1059,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Replace a named structure field and return its previous owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-structure array, unknown field, or
+    /// out-of-bounds element index. Ownership is not transferred on failure.
     pub fn replace_field(
         &mut self,
         index: usize,
@@ -862,6 +1078,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Replace a numbered structure field and return its previous owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-structure array or out-of-bounds element or
+    /// field index. Ownership is not transferred on failure.
     pub fn replace_field_by_number(
         &mut self,
         index: usize,
@@ -881,6 +1102,11 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Add a field to a structure array and return its field number.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-structure array or a native invalid-name or
+    /// allocation failure.
     pub fn add_field(&mut self, name: &CStr) -> Result<usize> {
         if !self.as_ref().is_struct() {
             return Err(Error::type_mismatch("add field", "struct", self.as_ref()));
@@ -897,6 +1123,10 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     }
 
     /// Remove a structure field after destroying all values it contained.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-structure array or out-of-bounds field.
     pub fn remove_field(&mut self, field: usize) -> Result<()> {
         if !self.as_ref().is_struct() {
             return Err(Error::type_mismatch(
@@ -918,17 +1148,26 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
 
     /// Assign a public object property. MATLAB copies `value`; its ownership
     /// remains with Rust and is never transferred into the object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-object or out-of-bounds index. The native
+    /// `mxSetProperty` operation has no status return; see
+    /// [`crate::error_handling`].
     pub fn set_property(&mut self, index: usize, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
-        if !self.as_ref().is_object() {
-            return Err(Error::type_mismatch(
-                "set property",
-                "object",
-                self.as_ref(),
-            ));
-        }
         if index >= self.as_ref().numel() {
             return Err(Error::bounds("set property", index, self.as_ref().numel()));
         }
+        let existing =
+            unsafe { ffi::matrust_property_get(self.raw.as_ptr(), index, name.as_ptr()) };
+        let existing = NonNull::new(existing).ok_or_else(|| {
+            Error::new(
+                ErrorKind::Native,
+                "set property",
+                "property does not exist or is not public",
+            )
+        })?;
+        unsafe { ffi::matrust_array_destroy(existing.as_ptr()) };
         unsafe {
             ffi::matrust_property_set(self.raw.as_ptr(), index, name.as_ptr(), value.as_ptr())
         };
@@ -952,6 +1191,11 @@ pub struct UninitNumeric<'mex, T: Numeric> {
 
 impl<'mex, T: Numeric> UninitNumeric<'mex, T> {
     /// Initialize every element and convert the allocation into an owned array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value count does not match the allocation or
+    /// the native buffer cannot form a valid Rust slice.
     pub fn fill(self, values: &[T]) -> Result<OwnedArray<'mex>> {
         if values.len() != self.array.as_ref().numel() {
             return Err(Error::new(
@@ -984,8 +1228,10 @@ impl<'mex, T: Numeric> UninitNumeric<'mex, T> {
                 "buffer is too large for a Rust slice",
             ));
         }
-        unsafe {
-            std::ptr::copy_nonoverlapping(values.as_ptr(), raw, count);
+        if count != 0 {
+            unsafe {
+                std::ptr::copy_nonoverlapping(values.as_ptr(), raw, count);
+            }
         }
         Ok(self.array)
     }
@@ -993,6 +1239,11 @@ impl<'mex, T: Numeric> UninitNumeric<'mex, T> {
 
 impl<'mex> Matlab<'mex> {
     /// Allocate an uninitialized dense numeric array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid or overflowing shape or a null native
+    /// allocation result.
     pub fn uninit_numeric<T: Numeric>(
         &self,
         dimensions: &[usize],
@@ -1015,6 +1266,11 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Create a dense numeric array from a complete element slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid shape, a shape/value length mismatch,
+    /// or a null native allocation result.
     pub fn numeric<T: Numeric>(
         &self,
         dimensions: &[usize],
@@ -1024,11 +1280,20 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Create a 1-by-1 numeric value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MATLAB cannot allocate the array.
     pub fn scalar<T: Numeric>(&self, value: T) -> Result<OwnedArray<'mex>> {
         self.numeric(&[1, 1], &[value])
     }
 
     /// Create a dense logical array from a complete value slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid shape, a shape/value length mismatch,
+    /// or a null native allocation result.
     pub fn logical(&self, dimensions: &[usize], values: &[bool]) -> Result<OwnedArray<'mex>> {
         validate_dimensions(dimensions)?;
         if element_count(dimensions)? != values.len() {
@@ -1046,6 +1311,11 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Create a UTF-16 character array from column-major code units.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid shape, a shape/value length mismatch,
+    /// or a null native allocation result.
     pub fn char_array(&self, dimensions: &[usize], values: &[u16]) -> Result<OwnedArray<'mex>> {
         validate_dimensions(dimensions)?;
         if element_count(dimensions)? != values.len() {
@@ -1063,12 +1333,20 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Create a 1-by-N UTF-16 MATLAB character array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for length overflow or a null native allocation result.
     pub fn string(&self, value: &str) -> Result<OwnedArray<'mex>> {
         let utf16: Vec<u16> = value.encode_utf16().collect();
         self.char_array(&[1, utf16.len()], &utf16)
     }
 
     /// Create a padded MATLAB character matrix from UTF-8 Rust strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for length overflow or a null native allocation result.
     pub fn char_matrix(&self, rows: &[&str]) -> Result<OwnedArray<'mex>> {
         let rows: Vec<Vec<u16>> = rows
             .iter()
@@ -1092,6 +1370,11 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Create an empty cell array with the given dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid or overflowing shape or a null native
+    /// allocation result.
     pub fn cell(&self, dimensions: &[usize]) -> Result<OwnedArray<'mex>> {
         validate_dimensions(dimensions)?;
         element_count(dimensions)?;
@@ -1101,21 +1384,36 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Create an empty structure array with the requested fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid or overflowing shape, too many fields,
+    /// invalid native field metadata, or a null allocation result.
     pub fn structure(&self, dimensions: &[usize], fields: &[&CStr]) -> Result<OwnedArray<'mex>> {
         validate_dimensions(dimensions)?;
         element_count(dimensions)?;
         let count = i32::try_from(fields.len())
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "create struct", "too many fields"))?;
         let names: Vec<_> = fields.iter().map(|name| name.as_ptr()).collect();
+        let names_ptr = if names.is_empty() {
+            std::ptr::null()
+        } else {
+            names.as_ptr()
+        };
         let raw = unsafe {
-            ffi::matrust_create_struct(dimensions.len(), dimensions.as_ptr(), count, names.as_ptr())
+            ffi::matrust_create_struct(dimensions.len(), dimensions.as_ptr(), count, names_ptr)
         };
         let raw = NonNull::new(raw).ok_or_else(|| Error::allocation("create struct array"))?;
         Ok(unsafe { OwnedArray::from_raw(raw) })
     }
 
     /// Create a numeric sparse array from validated CSC components.
-    pub fn sparse<T: Numeric>(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CSC components or a null native
+    /// allocation result.
+    pub fn sparse<T: SparseNumeric>(
         &self,
         rows: usize,
         columns: usize,
@@ -1124,13 +1422,6 @@ impl<'mex> Matlab<'mex> {
         values: &[T],
     ) -> Result<OwnedArray<'mex>> {
         validate_sparse(rows, columns, column_offsets, row_indices, values.len())?;
-        if T::CLASS != Class::Double {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "create sparse array",
-                "MATLAB's published numeric sparse constructor supports f64 and Complex<f64>",
-            ));
-        }
         let raw = unsafe {
             ffi::matrust_create_sparse(rows, columns, values.len().max(1), 0, i32::from(T::COMPLEX))
         };
@@ -1157,6 +1448,11 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Create a sparse logical array from validated CSC components.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed CSC components or a null native
+    /// allocation result.
     pub fn logical_sparse(
         &self,
         rows: usize,

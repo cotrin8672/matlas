@@ -136,7 +136,7 @@ impl Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {:?}", self.operation, self.detail)?;
+        write!(f, "{}: {}", self.operation, self.detail)?;
         if let Some(status) = self.status {
             write!(f, " (status {status})")?;
         }

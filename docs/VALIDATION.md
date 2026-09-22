@@ -19,4 +19,11 @@ checks, sequential and metadata readers, workspace copies, explicit close,
 panic/error cleanup, and the ownership constructors (numeric, char, logical,
 cell, and sparse). It also validates real/complex/logical sparse value access,
 empty sparse arrays, multidimensional indexing, and padded character matrices.
-Linux and macOS are not yet validated.
+It stores, reads twice, and removes a persistent array across separate MEX
+invocations, and holds/releases an RAII module lock across calls. Linux and
+macOS are not yet validated. Successful and failing trapped function calls,
+plus a failing trapped source evaluation, exercise callback `Result`
+propagation, including zero-input and zero-output calls. The suite also covers
+workspace borrows/copies, owned object properties, structure field ownership,
+reshape and real/complex conversion, metadata bits, and `mxRealloc` data
+preservation.

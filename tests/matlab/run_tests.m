@@ -75,6 +75,8 @@ for version = 0:4
     checks = checks + numel(data) * 3;
     fprintf('MATRUST_FORMAT_PASS %d (%d arrays)\n', version, numel(data));
 end
+fprintf('MATRUST_STAGE callback_after_formats\n');
+assert(matrust_integration(21, 3, 2, 5) == 7);
 
 try
     result = matrust_integration(8, 3, [7 8]); %#ok<NASGU>
@@ -107,6 +109,8 @@ catch e
     assert(strcmp(e.identifier, 'matrust:native'), e.message);
     assert(contains(e.message, '日本語 %s 100%?tail'), e.message);
 end
+fprintf('MATRUST_STAGE callback_after_errors\n');
+assert(matrust_integration(21, 3, 2, 5) == 7);
 matrust_integration(1, 3, basic{:}); % successful zero-output invocation
 from_caller = [10 20 30];
 assert(matrust_integration(11, 3) == 0);
@@ -118,6 +122,8 @@ for repeat = 1:25
     [out{:}] = matrust_integration(5, 3);
     assert(isequal(out, basic));
 end
+fprintf('MATRUST_STAGE callback_after_repeats\n');
+assert(matrust_integration(21, 3, 2, 5) == 7);
 fprintf('MATRUST_STAGE ownership_api\n');
 [madeNumeric, madeString, madeLogical, madeCell, madeSparse] = matrust_integration(14, 3);
 assert(isequal(madeNumeric, [1 3; 2 4]));
@@ -133,7 +139,58 @@ assert(isequal(complexSparse, sparse([1+2i 0; 0 7+4i])));
 assert(isequal(charMatrix, ['ab'; 'c ']));
 assert(isequal(size(emptySparse), [0 3]) && issparse(emptySparse));
 assert(isequal(size(emptyLogicalSparse), [0 3]) && issparse(emptyLogicalSparse) && islogical(emptyLogicalSparse));
-fprintf('MATRUST_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace\n', checks);
+fprintf('MATRUST_STAGE callback_after_ownership\n');
+assert(matrust_integration(21, 3, 2, 5) == 7);
+fprintf('MATRUST_STAGE persistent_cross_invocation\n');
+assert(matrust_integration(16, 3, 123.5) == 0);
+assert(matrust_integration(17, 3) == 123.5);
+assert(matrust_integration(17, 3) == 123.5);
+assert(matrust_integration(18, 3) == 0);
+try
+    matrust_integration(17, 3);
+    error('matrust:test:noPersistentError', 'Expected a missing persistent value error');
+catch e
+    assert(strcmp(e.identifier, 'matrust:input:invalid'), e.message);
+end
+fprintf('MATRUST_STAGE callback_after_persistent\n');
+assert(matrust_integration(21, 3, 2, 5) == 7);
+fprintf('MATRUST_STAGE module_lock_raii\n');
+assert(matrust_integration(19, 3) == 1);
+assert(matrust_integration(1, 3, basic{:}) == 0);
+assert(matrust_integration(20, 3) == 0);
+fprintf('MATRUST_STAGE callback_after_lock\n');
+assert(matrust_integration(21, 3, 2, 5) == 7);
+fprintf('MATRUST_STAGE trapped_callbacks\n');
+assert(matrust_integration(21, 3, 2, 5) == 7);
+assert(numel(matrust_integration(24, 3)) == 6);
+assert(matrust_integration(25, 3) == 0);
+[emptyStruct, madeStruct] = matrust_integration(26, 3);
+assert(isstruct(emptyStruct) && isempty(fieldnames(emptyStruct)));
+assert(isequal(fieldnames(madeStruct), {'kept'; 'extra'}));
+assert(madeStruct.kept == 42 && strcmp(madeStruct.extra, 'ok'));
+converted = matrust_integration(27, 3);
+assert(isequal(size(converted), [1 4]) && isequal(converted, [1 2 3 4]) && isreal(converted));
+from_caller_scalar = 9;
+assert(matrust_integration(28, 3) == 10);
+assert(from_rust == 10);
+object = MatrustTestObject;
+object.Value = 11;
+assert(matrust_integration(29, 3, object) == 22);
+try
+    matrust_integration(22, 3);
+    error('matrust:test:noCallbackError', 'Expected a trapped call error');
+catch e
+    assert(strcmp(e.identifier, 'matrust:callback'), e.message);
+    assert(contains(e.message, 'intentional callback failure'), e.message);
+end
+try
+    matrust_integration(23, 3);
+    error('matrust:test:noEvalError', 'Expected a trapped eval error');
+catch e
+    assert(strcmp(e.identifier, 'matrust:callback'), e.message);
+    assert(contains(e.message, 'intentional eval failure'), e.message);
+end
+fprintf('MATRUST_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks\n', checks);
 end
 
 function verifyFormat(path, version)

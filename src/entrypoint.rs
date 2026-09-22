@@ -36,10 +36,27 @@ pub unsafe fn dispatch(
                 "invalid MATLAB counts or pointers",
             ));
         }
+        let nlhs = usize::try_from(nlhs).map_err(|_| {
+            Error::new(
+                crate::ErrorKind::InvalidInput,
+                "MEX entrypoint",
+                "negative output count",
+            )
+        })?;
+        let nrhs = usize::try_from(nrhs).map_err(|_| {
+            Error::new(
+                crate::ErrorKind::InvalidInput,
+                "MEX entrypoint",
+                "negative input count",
+            )
+        })?;
+        for index in 0..nlhs {
+            unsafe { plhs.add(index).write(std::ptr::null_mut()) };
+        }
         let _invocation = runtime::begin_invocation()?;
         let mut context = Matlab::new();
-        let mut values = Vec::with_capacity(nrhs as usize);
-        for index in 0..nrhs as usize {
+        let mut values = Vec::with_capacity(nrhs);
+        for index in 0..nrhs {
             let raw = unsafe { *prhs.add(index) };
             let raw = std::ptr::NonNull::new(raw.cast_mut()).ok_or_else(|| {
                 Error::new(
@@ -51,9 +68,9 @@ pub unsafe fn dispatch(
             values.push(unsafe { ArrayRef::from_raw(raw) });
         }
         let inputs = Inputs::new(values);
-        let mut outputs = Outputs::new(nlhs as usize);
+        let mut outputs = Outputs::new(nlhs);
         handler(&mut context, inputs, &mut outputs)?;
-        for index in 0..nlhs as usize {
+        for index in 0..nlhs {
             if let Some(value) = outputs.take(index)? {
                 unsafe { plhs.add(index).write(value.into_raw()) };
             }
@@ -75,7 +92,7 @@ pub unsafe fn dispatch(
                 .or_else(|| payload.downcast_ref::<&str>().copied())
                 .unwrap_or("Rust panic in MEX handler");
             copy_text(message, text);
-            std::mem::forget(payload);
+            let _ = catch_unwind(AssertUnwindSafe(|| drop(payload)));
             1
         }
     }

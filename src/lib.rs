@@ -5,6 +5,8 @@
 //! MATLAB workspace memory that also prevents calls which may invalidate it.
 
 #![deny(missing_docs)]
+#![deny(clippy::missing_errors_doc)]
+#![deny(clippy::missing_panics_doc)]
 
 #[doc(hidden)]
 #[path = "entrypoint.rs"]
@@ -18,13 +20,17 @@ mod runtime;
 
 pub use array::{
     ArrayMut, ArrayRef, Class, Complex, Numeric, OwnedArray, PersistentArray, SparseIndices,
-    UninitNumeric,
+    SparseNumeric, UninitNumeric,
 };
 pub use error::{Error, ErrorKind, MatError, Result};
 
 /// Function-by-function coverage of the R2025a API-800 C headers.
 #[doc = include_str!("../docs/API_COVERAGE.md")]
 pub mod api_coverage {}
+
+/// Error propagation guarantees and unavoidable native termination cases.
+#[doc = include_str!("../docs/ERROR_HANDLING.md")]
+pub mod error_handling {}
 
 use std::{
     ffi::{c_char, c_void, CStr, CString},
@@ -85,6 +91,11 @@ impl MxBuffer<'_> {
         unsafe { std::slice::from_raw_parts_mut(self.raw.as_ptr(), self.len) }
     }
     /// Resize the allocation with `mxRealloc`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an allocation error if MATLAB cannot resize the buffer. The
+    /// original allocation remains owned by this value on failure.
     pub fn resize(&mut self, len: usize) -> Result<()> {
         let raw = unsafe { ffi::matrust_realloc(self.raw.as_ptr().cast(), len.max(1)) };
         self.raw = NonNull::new(raw.cast())
@@ -105,6 +116,33 @@ pub struct Matlab<'mex> {
     _thread: PhantomData<Rc<()>>,
 }
 
+/// One counted lock on the current MEX module.
+///
+/// The guard may be stored between invocations. Dropping it calls `mexUnlock`
+/// exactly once, so safe code cannot accidentally unbalance the native lock
+/// count. Use [`ModuleLock::release`] when the release point should be explicit.
+#[must_use = "dropping the module lock immediately unlocks the MEX module"]
+pub struct ModuleLock {
+    active: bool,
+    _thread: PhantomData<Rc<()>>,
+}
+
+impl ModuleLock {
+    /// Release this counted lock immediately.
+    pub fn release(mut self) {
+        unsafe { ffi::matrust_unlock() };
+        self.active = false;
+    }
+}
+
+impl Drop for ModuleLock {
+    fn drop(&mut self) {
+        if self.active {
+            unsafe { ffi::matrust_unlock() };
+        }
+    }
+}
+
 impl<'mex> Matlab<'mex> {
     pub(crate) fn new() -> Self {
         Self {
@@ -122,12 +160,50 @@ impl<'mex> Matlab<'mex> {
         Self::new()
     }
 
+    /// Deep-copy any borrowed array into a new Rust-owned MATLAB allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an allocation error if MATLAB cannot return a copy.
+    pub fn duplicate(&self, value: ArrayRef<'_>) -> Result<OwnedArray<'mex>> {
+        let raw = unsafe { ffi::matrust_array_duplicate(value.as_ptr()) };
+        let raw = NonNull::new(raw).ok_or_else(|| Error::allocation("duplicate array"))?;
+        Ok(unsafe { OwnedArray::from_raw(raw) })
+    }
+
+    /// Read a public property from any borrowed object. MATLAB returns an
+    /// owned copy branded to the current invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an out-of-bounds index, a non-object, an unknown
+    /// or nonpublic property, or a native allocation failure.
+    pub fn property(
+        &self,
+        object: ArrayRef<'_>,
+        index: usize,
+        name: &CStr,
+    ) -> Result<OwnedArray<'mex>> {
+        if index >= object.numel() {
+            return Err(Error::bounds("get property", index, object.numel()));
+        }
+        let raw = unsafe { ffi::matrust_property_get(object.as_ptr(), index, name.as_ptr()) };
+        NonNull::new(raw)
+            .map(|raw| unsafe { OwnedArray::from_raw(raw) })
+            .ok_or_else(|| Error::new(ErrorKind::Native, "get property", format!("{name:?}")))
+    }
+
     /// Return the name by which MATLAB invoked the current MEX function.
     pub fn function_name(&self) -> &CStr {
         unsafe { CStr::from_ptr(ffi::matrust_function_name()) }
     }
 
     /// Print literal UTF-8 text to MATLAB's command window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the text contains NUL or the native print routine
+    /// reports failure.
     pub fn printf(&mut self, text: &str) -> Result<()> {
         let text = CString::new(text)
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "printf", "text contains NUL"))?;
@@ -138,6 +214,10 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Issue a MATLAB warning with an identifier and literal message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message contains NUL.
     pub fn warning(&mut self, id: &CStr, text: &str) -> Result<()> {
         let text = CString::new(text)
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "warning", "text contains NUL"))?;
@@ -146,6 +226,10 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Allocate zeroed MATLAB-managed memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an allocation error if MATLAB returns a null pointer.
     pub fn calloc(&self, len: usize) -> Result<MxBuffer<'mex>> {
         let bytes = if len == 0 { 1 } else { len };
         let raw = unsafe { ffi::matrust_calloc(1, bytes) };
@@ -159,13 +243,14 @@ impl<'mex> Matlab<'mex> {
         })
     }
 
-    /// Prevent MATLAB from clearing the current MEX module.
-    pub fn lock(&mut self) {
-        unsafe { ffi::matrust_lock() }
-    }
-    /// Release one MEX module lock.
-    pub fn unlock(&mut self) {
-        unsafe { ffi::matrust_unlock() }
+    /// Prevent MATLAB from clearing the current MEX module until the returned
+    /// guard is dropped or explicitly released.
+    pub fn lock(&mut self) -> ModuleLock {
+        unsafe { ffi::matrust_lock() };
+        ModuleLock {
+            active: true,
+            _thread: PhantomData,
+        }
     }
     /// Test whether the current MEX module is locked.
     pub fn is_locked(&self) -> bool {
@@ -173,6 +258,11 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Copy a variable from a MATLAB workspace into a Rust-owned array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named variable does not exist or MATLAB cannot
+    /// copy it.
     pub fn workspace_get(&mut self, space: Workspace, name: &CStr) -> Result<OwnedArray<'mex>> {
         let raw = unsafe { ffi::matrust_workspace_get(space.as_ptr(), name.as_ptr()) };
         NonNull::new(raw)
@@ -190,6 +280,10 @@ impl<'mex> Matlab<'mex> {
     ///
     /// The mutable context borrow prevents callbacks and workspace mutations
     /// while the returned pointer may be invalidated by MATLAB.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named variable does not exist.
     pub fn workspace_borrow<'a>(
         &'a mut self,
         space: Workspace,
@@ -211,6 +305,11 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Copy a borrowed array into a MATLAB workspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error while a workspace pointer is borrowed or if MATLAB
+    /// rejects the copy.
     pub fn workspace_put(
         &mut self,
         space: Workspace,
@@ -228,6 +327,11 @@ impl<'mex> Matlab<'mex> {
     }
 
     /// Call a MATLAB function through the trapping API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an active workspace borrow, more than 50 inputs or
+    /// outputs, a trapped MATLAB exception, or a null output.
     pub fn call(
         &mut self,
         name: &CStr,
@@ -249,26 +353,29 @@ impl<'mex> Matlab<'mex> {
             inputs.iter().map(|v| v.as_ptr().cast_mut()).collect();
         let input_count = i32::try_from(raw_inputs.len())
             .map_err(|_| Error::new(ErrorKind::InvalidInput, "call MATLAB", "too many inputs"))?;
-        let trap = unsafe {
-            ffi::matrust_call_with_trap(
-                count,
-                outputs.as_mut_ptr(),
-                input_count,
-                raw_inputs.as_mut_ptr(),
-                name.as_ptr(),
-            )
+        let outputs_ptr = if outputs.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            outputs.as_mut_ptr()
         };
-        if !trap.is_null() {
+        let inputs_ptr = if raw_inputs.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            raw_inputs.as_mut_ptr()
+        };
+        let trap = unsafe {
+            ffi::matrust_call_with_trap(count, outputs_ptr, input_count, inputs_ptr, name.as_ptr())
+        };
+        if let Some(trap) = NonNull::new(trap) {
             for raw in outputs {
                 if !raw.is_null() {
                     unsafe { ffi::matrust_array_destroy(raw) }
                 }
             }
-            unsafe { ffi::matrust_array_destroy(trap) };
-            return Err(Error::new(
-                ErrorKind::Callback,
+            return Err(callback_error(
+                trap,
                 "call MATLAB",
-                format!("{name:?} failed"),
+                format!("{name:?} failed without exception details"),
             ));
         }
         if outputs.iter().any(|raw| raw.is_null()) {
@@ -285,13 +392,24 @@ impl<'mex> Matlab<'mex> {
         }
         let mut result = Vec::with_capacity(output_count);
         for raw in outputs {
-            let raw = NonNull::new(raw).expect("outputs were checked for null");
+            let raw = NonNull::new(raw).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Callback,
+                    "call MATLAB",
+                    "MATLAB returned a null output",
+                )
+            })?;
             result.push(unsafe { OwnedArray::from_raw(raw) });
         }
         Ok(result)
     }
 
     /// Evaluate MATLAB source through the trapping API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an active workspace borrow, an embedded NUL, or a
+    /// trapped MATLAB exception.
     pub fn eval(&mut self, command: &str) -> Result<()> {
         runtime::require_unborrowed("evaluate MATLAB")?;
         let command = CString::new(command).map_err(|_| {
@@ -302,17 +420,36 @@ impl<'mex> Matlab<'mex> {
             )
         })?;
         let trap = unsafe { ffi::matrust_eval_with_trap(command.as_ptr()) };
-        if trap.is_null() {
-            Ok(())
-        } else {
-            unsafe { ffi::matrust_array_destroy(trap) };
-            Err(Error::new(
-                ErrorKind::Callback,
+        if let Some(trap) = NonNull::new(trap) {
+            Err(callback_error(
+                trap,
                 "evaluate MATLAB",
-                "command failed",
+                "command failed without exception details".to_owned(),
             ))
+        } else {
+            Ok(())
         }
     }
+}
+
+fn callback_error(raw: NonNull<ffi::RawArray>, operation: &'static str, fallback: String) -> Error {
+    let trap = unsafe { OwnedArray::from_raw(raw) };
+    let identifier = trap
+        .property(0, c"identifier")
+        .and_then(|value| value.as_ref().to_utf8())
+        .ok();
+    let message = trap
+        .property(0, c"message")
+        .and_then(|value| value.as_ref().to_utf8())
+        .ok();
+    let detail = match (identifier, message) {
+        (Some(identifier), Some(message)) if !identifier.is_empty() => {
+            format!("{identifier}: {message}")
+        }
+        (_, Some(message)) => message,
+        _ => fallback,
+    };
+    Error::new(ErrorKind::Callback, operation, detail)
 }
 
 /// MATLAB's three workspace namespaces.
@@ -403,6 +540,10 @@ impl<'mex> Outputs<'mex> {
         self.values.is_empty()
     }
     /// Transfer an owned array into an output slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is out of bounds or the slot is already set.
     pub fn set(&mut self, index: usize, value: OwnedArray<'mex>) -> Result<()> {
         let len = self.values.len();
         let slot = self
@@ -420,6 +561,10 @@ impl<'mex> Outputs<'mex> {
         Ok(())
     }
     /// Take back an output array that was previously set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is out of bounds.
     pub fn take(&mut self, index: usize) -> Result<Option<OwnedArray<'mex>>> {
         let len = self.values.len();
         self.values
@@ -475,6 +620,11 @@ pub struct MatFile<'mex, 'ctx> {
 }
 impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
     /// Open a MAT-file with an explicit access mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-Unicode/NUL-containing path or if MATLAB
+    /// cannot open the file in the requested mode.
     pub fn open(
         context: &'ctx Matlab<'mex>,
         path: impl AsRef<Path>,
@@ -491,10 +641,18 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             .ok_or_else(|| Error::new(ErrorKind::Open, "open MAT-file", format!("{path:?}")))
     }
     /// Create a version-7 MAT-file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid path or native open failure.
     pub fn create(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         Self::open(context, path, OpenMode::Write(MatVersion::V7))
     }
     /// Create a MAT-file in a selected format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid path or native open failure.
     pub fn create_with_format(
         context: &'ctx Matlab<'mex>,
         path: impl AsRef<Path>,
@@ -528,6 +686,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
         }
     }
     /// Write a variable by copying a borrowed array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong file mode, an empty name, or a native
+    /// write failure.
     pub fn put(&mut self, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
         self.require_write()?;
         validate_name(name)?;
@@ -548,6 +711,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
         }
     }
     /// Write a variable marked as global.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong file mode, an empty name, or a native
+    /// write failure.
     pub fn put_global(&mut self, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
         self.require_write()?;
         validate_name(name)?;
@@ -568,6 +736,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
         }
     }
     /// Read a complete variable into an owned array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong file mode, an empty name, a missing
+    /// variable, or a native read failure.
     pub fn get(&mut self, name: &CStr) -> Result<OwnedArray<'mex>> {
         self.require_read()?;
         validate_name(name)?;
@@ -586,6 +759,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             })
     }
     /// Read only a variable header and metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong file mode, an empty name, a missing
+    /// variable, or a native read failure.
     pub fn info(&mut self, name: &CStr) -> Result<ArrayInfo<'mex>> {
         self.require_read()?;
         validate_name(name)?;
@@ -607,6 +785,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             })
     }
     /// Delete a variable from an update-mode file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong file mode, an empty name, or a native
+    /// delete failure.
     pub fn delete(&mut self, name: &CStr) -> Result<()> {
         self.require_write()?;
         validate_name(name)?;
@@ -625,6 +808,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
         }
     }
     /// Return every variable name in the file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong file mode or malformed/native directory
+    /// output.
     pub fn variables(&mut self) -> Result<Vec<CString>> {
         self.require_read()?;
         let (mut count, mut code) = (0, 0);
@@ -671,8 +859,18 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
         })
     }
     /// Close the file and report the native close status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `matClose` reports failure.
     pub fn close(mut self) -> Result<()> {
-        let raw = self.raw.take().expect("live MAT-file");
+        let raw = self.raw.take().ok_or_else(|| {
+            Error::new(
+                ErrorKind::Close,
+                "close MAT-file",
+                "file handle was already closed",
+            )
+        })?;
         let status = unsafe { ffi::matrust_mat_close(raw.as_ptr()) };
         if status == 0 {
             Ok(())
@@ -711,6 +909,10 @@ impl FileStream<'_> {
         unsafe { ffi::matrust_stream_clear(self.raw.as_ptr()) }
     }
     /// Return the current byte position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the native stream position is negative.
     pub fn position(&self) -> Result<u64> {
         u64::try_from(unsafe { ffi::matrust_stream_position(self.raw.as_ptr()) }).map_err(|_| {
             Error::new(
@@ -790,6 +992,11 @@ pub struct Variables<'mex, 'ctx> {
 }
 impl<'mex, 'ctx> Variables<'mex, 'ctx> {
     /// Open a file for sequential variable reading.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened, listed, or closed while
+    /// preparing the sequential reader.
     pub fn open(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         let mut directory = MatFile::open(context, &path, OpenMode::Read)?;
         let remaining = directory.variables()?.len();
@@ -801,6 +1008,10 @@ impl<'mex, 'ctx> Variables<'mex, 'ctx> {
         })
     }
     /// Close the underlying MAT-file and report its status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `matClose` reports failure.
     pub fn close(self) -> Result<()> {
         self.file.close()
     }
@@ -852,6 +1063,11 @@ pub struct VariableInfos<'mex, 'ctx> {
 }
 impl<'mex, 'ctx> VariableInfos<'mex, 'ctx> {
     /// Open a file for sequential metadata reading.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened, listed, or closed while
+    /// preparing the sequential reader.
     pub fn open(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         let mut directory = MatFile::open(context, &path, OpenMode::Read)?;
         let remaining = directory.variables()?.len();
@@ -863,6 +1079,10 @@ impl<'mex, 'ctx> VariableInfos<'mex, 'ctx> {
         })
     }
     /// Close the underlying MAT-file and report its status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `matClose` reports failure.
     pub fn close(self) -> Result<()> {
         self.file.close()
     }
@@ -970,6 +1190,15 @@ pub use ffi::RawArray;
 /// The safe types above cover ordinary use. This module also exposes pointer
 /// adoption, non-trapping callbacks, and MATLAB error functions that cannot be
 /// made safe without caller-provided invariants. See [`crate::api_coverage`].
+///
+/// # Safety
+///
+/// Callers must uphold every contract from the corresponding MATLAB C API,
+/// including pointer validity, class/layout agreement, allocation-family
+/// matching, unique ownership, thread affinity, and non-local-exit behavior.
+/// Raw calls must not destroy, transfer, mutate, or replace the exit callback
+/// for values or runtime state still managed by the safe API. Violating those
+/// rules can invalidate safe Rust references or cause double frees.
 #[allow(missing_docs)]
 pub mod raw {
     pub use crate::ffi::*;
