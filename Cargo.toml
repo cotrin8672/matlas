@@ -3,9 +3,15 @@ name = "rustmat"
 version = "0.1.0"
 edition = "2021"
 description = "MAT-File C API with rustmex ownership and error integration"
+license = "MIT"
 repository = "https://github.com/cotrin8672/rustmat"
+documentation = "https://docs.rs/rustmat"
+readme = "README.md"
+keywords = ["matlab", "mat-file", "mex", "rustmex", "ffi"]
+categories = ["api-bindings", "science"]
 links = "rustmat800"
-publish = false
+rust-version = "1.77"
+exclude = ["/.github", "/docs/RELEASING.md", "/tests"]
 
 [dependencies]
 rustmex = { version = "0.6.4", default-features = false, features = ["matlab800"] }

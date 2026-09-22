@@ -1,0 +1,24 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  crates-io:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check release version
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rustmat") | .version')
+          test "${GITHUB_REF_NAME}" = "v${version}"
+      - name: Publish to crates.io
+        run: cargo publish --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CREATE_IO_API_KEY }}
