@@ -5,14 +5,14 @@ fn main() {
     println!("cargo:rerun-if-changed=native/mat_shim.c");
     println!("cargo:rerun-if-changed=native/mex_entry.c");
     if env::var_os("DOCS_RS").is_some() {
-        println!("cargo:rustc-env=RUSTMAT_BUILD_RELEASE=0");
+        println!("cargo:rustc-env=MATRUST_BUILD_RELEASE=0");
         return;
     }
-    let root = PathBuf::from(env::var_os("MATLABROOT").expect(
-        "Set MATLABROOT to your MATLAB installation. Windows also needs the mex800 Cargo override; see README.",
-    ));
+    let root = PathBuf::from(
+        env::var_os("MATLABROOT").expect("Set MATLABROOT to your MATLAB installation."),
+    );
     let include = root.join("extern/include");
-    for name in ["mat.h", "matrix.h", "tmwtypes.h"] {
+    for name in ["mat.h", "matrix.h", "mex.h", "tmwtypes.h"] {
         let header = include.join(name);
         assert!(
             header.is_file(),
@@ -58,16 +58,16 @@ fn main() {
         .and_then(|s| s.split('<').next())
         .expect("MATLAB release identifier");
     let release = u32::from_str_radix(release, 16).expect("MATLAB release must look like R2025a");
-    println!("cargo:rustc-env=RUSTMAT_BUILD_RELEASE={release}");
+    println!("cargo:rustc-env=MATRUST_BUILD_RELEASE={release}");
     cc::Build::new()
         .static_crt(false)
         .file("native/mat_shim.c")
         .file("native/mex_entry.c")
         .include(include)
         .define("TARGET_API_VERSION", "800")
-        .define("RUSTMAT_BUILD_RELEASE", release.to_string().as_str())
+        .define("MATRUST_BUILD_RELEASE", release.to_string().as_str())
         .warnings(true)
-        .compile("rustmat800");
+        .compile("matrust800");
     println!("cargo:rustc-link-search=native={}", lib.display());
     for name in ["mat", "mx", "mex"] {
         println!("cargo:rustc-link-lib={prefix}{name}");

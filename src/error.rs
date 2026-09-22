@@ -9,6 +9,12 @@ pub struct MatError(pub i32);
 #[non_exhaustive]
 pub enum ErrorKind {
     InvalidInput,
+    Type,
+    Bounds,
+    Allocation,
+    Callback,
+    Workspace,
+    Busy,
     InvalidMode,
     Open,
     Read,
@@ -18,7 +24,7 @@ pub enum ErrorKind {
     Native,
 }
 
-/// A Rust error that also converts to `rustmex::Error` through `?`.
+/// An error that preserves the native operation and MATLAB error status.
 #[derive(Debug)]
 pub struct Error {
     pub kind: ErrorKind,
@@ -29,7 +35,7 @@ pub struct Error {
 }
 
 impl Error {
-    pub(crate) fn new(kind: ErrorKind, operation: &'static str, detail: impl Into<String>) -> Self {
+    pub fn new(kind: ErrorKind, operation: &'static str, detail: impl Into<String>) -> Self {
         Self {
             kind,
             operation,
@@ -53,6 +59,58 @@ impl Error {
             mat_error: Some(MatError(code)),
         }
     }
+
+    pub(crate) fn allocation(operation: &'static str) -> Self {
+        Self::new(
+            ErrorKind::Allocation,
+            operation,
+            "MATLAB returned a null allocation",
+        )
+    }
+
+    pub(crate) fn native_status(operation: &'static str, status: i32) -> Self {
+        let mut error = Self::new(ErrorKind::Native, operation, "native operation failed");
+        error.status = Some(status);
+        error
+    }
+
+    pub(crate) fn bounds(operation: &'static str, index: usize, length: usize) -> Self {
+        Self::new(
+            ErrorKind::Bounds,
+            operation,
+            format!("index {index} is outside length {length}"),
+        )
+    }
+
+    pub(crate) fn type_mismatch(
+        operation: &'static str,
+        expected: &str,
+        actual: crate::ArrayRef<'_>,
+    ) -> Self {
+        Self::new(
+            ErrorKind::Type,
+            operation,
+            format!("expected {expected}, got {:?}", actual.class_name()),
+        )
+    }
+
+    pub fn id(&self) -> &'static str {
+        match self.kind {
+            ErrorKind::InvalidInput => "matrust:input:invalid",
+            ErrorKind::Type => "matrust:array:type",
+            ErrorKind::Bounds => "matrust:array:bounds",
+            ErrorKind::Allocation => "matrust:allocation",
+            ErrorKind::Callback => "matrust:callback",
+            ErrorKind::Workspace => "matrust:workspace",
+            ErrorKind::Busy => "matrust:runtime:busy",
+            ErrorKind::InvalidMode => "matrust:file:mode",
+            ErrorKind::Open => "matrust:file:open",
+            ErrorKind::Read | ErrorKind::UnexpectedEnd => "matrust:file:read",
+            ErrorKind::Write => "matrust:file:write",
+            ErrorKind::Close => "matrust:file:close",
+            ErrorKind::Native => "matrust:native",
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -68,18 +126,4 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
-impl rustmex::MexMessage for Error {
-    fn id(&self) -> &str {
-        match self.kind {
-            ErrorKind::InvalidInput => "rustmat:input:invalid",
-            ErrorKind::InvalidMode => "rustmat:file:mode",
-            ErrorKind::Open => "rustmat:file:open",
-            ErrorKind::Read | ErrorKind::UnexpectedEnd => "rustmat:file:read",
-            ErrorKind::Write => "rustmat:file:write",
-            ErrorKind::Close => "rustmat:file:close",
-            ErrorKind::Native => "rustmat:file:native",
-        }
-    }
-}
-
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,30 +1,35 @@
 # Design
 
-`rustmat` extends rustmex's ownership model to MATLAB's published MAT-file C API. MATLAB parses and writes the file format; the crate does not implement a MAT parser, an array type, or a serialization framework.
+`matrust` makes MATLAB's ownership conventions visible in Rust's type system.
+The C shim is private; safe callers never manipulate an `mxArray*` directly.
 
-## Boundaries
+## Ownership categories
 
-- A private C shim resolves the API 800 symbols from `mat.h`.
-- `Matlab::attach()` is the explicit unsafe boundary for the current MEX thread and runtime.
-- `MatFile<'ctx>` and metadata are tied to that context and are neither `Send` nor `Sync`.
-- `put` borrows an `mxArray`; `get` returns an owned rustmex `MxArray`.
-- `ArrayInfo` is metadata-only and cannot become a normal `mxArray`.
-- `close(self)` reports finalization errors. `Drop` closes once but cannot report failure.
+- `OwnedArray<'mex>` is the sole owner and calls `mxDestroyArray` on drop.
+- `ArrayRef<'a>` is a read-only borrow from an input, owned array, cell, or
+  struct. It has no destructor and cannot be transferred to MATLAB.
+- `ArrayMut<'a, 'mex>` is an exclusive borrow of an owned array. Replacing a
+  cell/field consumes an `OwnedArray`, making transfer explicit.
+- `WorkspaceRef<'a>` models `mexGetVariablePtr`; it borrows `&mut Matlab` and
+  holds a runtime guard. Calls that may invalidate MATLAB-owned pointers are
+  rejected while it is alive.
+- `PersistentArray<'mex>` owns a generation-checked persistent slot. Dropping
+  or explicitly removing the key releases the MATLAB array; the MEX exit hook
+  is a final cleanup path.
+- `ArrayInfo<'mex>` owns metadata returned by `matGetVariableInfo` but exposes
+  no conversion to a full data array.
 
-## Native API mapping
+The `Matlab<'mex>` brand is invariant and thread-bound. MEX entrypoints create
+it internally; `Matlab::attach` is unsafe for standalone/manual integration.
 
-| MAT-file C API | Rust API |
-| --- | --- |
-| `matOpen`, `matClose` | `MatFile::open`, `create*`, `close` |
-| `matPutVariable`, `matPutVariableAsGlobal` | `put`, `put_global` |
-| `matGetVariable`, `matGetVariableInfo` | `get`, `info` |
-| `matGetNextVariable`, `matGetNextVariableInfo` | `Variables`, `VariableInfos` |
-| `matGetDir`, `matDeleteVariable` | `variables`, `delete` |
-| `matGetErrno` | `last_error`, `Error::mat_error` |
-| `matGetFp` | borrowed `FileStream` diagnostics |
+## Calls and errors
 
-Sequential readers own a dedicated handle because MATLAB forbids mixing `matGetNextVariable*` with other file operations. They use a separate handle to obtain the expected variable count, making premature end-of-file an error.
+`Matlab::call` and `eval` use MATLAB's trap APIs. A trapped exception becomes a
+`Callback` error after all temporary outputs are destroyed. The entrypoint
+converts Rust `Result` and panics to MATLAB errors only after Rust destructors
+have run. Native aborts and MATLAB out-of-memory termination are outside any
+Rust destructor guarantee because they do not unwind the Rust stack.
 
-`mex_entrypoint!` places `mexFunction` in C. Rust first handles `Result`, panic conversion, output ownership, and destructors; only then does C call MATLAB's error function. Native exceptions, aborts, out-of-memory failures, and double panics remain outside this guarantee.
-
-The crate does not distribute MATLAB headers or libraries. Supported MATLAB value types remain limited by the MAT-file API.
+`MatFile` uses a separate owner for every file handle. `close(self)` reports
+the final native status; `Drop` closes once when the caller does not inspect
+that status. Returned arrays remain valid after the file is closed.

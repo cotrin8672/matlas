@@ -16,7 +16,7 @@ jobs:
       - name: Check release version
         shell: bash
         run: |
-          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "rustmat") | .version')
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "matrust") | .version')
           test "${GITHUB_REF_NAME}" = "v${version}"
       - name: Publish to crates.io
         run: cargo publish --locked --no-verify

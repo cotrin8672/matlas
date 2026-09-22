@@ -1,20 +1,19 @@
 [package]
-name = "rustmat"
-version = "0.1.0"
+name = "matrust"
+version = "0.2.0"
 edition = "2021"
-description = "MAT-File C API with rustmex ownership and error integration"
+description = "Safe, idiomatic Rust bindings for MATLAB's Matrix, MEX, and MAT-file APIs"
 license = "MIT"
-repository = "https://github.com/cotrin8672/rustmat"
-documentation = "https://docs.rs/rustmat"
+repository = "https://github.com/cotrin8672/matrust"
+documentation = "https://docs.rs/matrust"
 readme = "README.md"
-keywords = ["matlab", "mat-file", "mex", "rustmex", "ffi"]
+keywords = ["matlab", "mat-file", "mex", "ffi", "science"]
 categories = ["api-bindings", "science"]
-links = "rustmat800"
+links = "matrust800"
 rust-version = "1.77"
 exclude = ["/.github", "/docs/RELEASING.md", "/tests"]
 
 [dependencies]
-rustmex = { version = "0.6.4", default-features = false, features = ["matlab800"] }
 
 [build-dependencies]
 cc = "1"

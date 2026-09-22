@@ -1,75 +1,51 @@
-# rustmat
+# matrust
 
-Safe MAT-file I/O for Rust MEX functions built with [rustmex](https://crates.io/crates/rustmex).
-
-`rustmat` wraps all 12 functions in MATLAB's published `mat.h` API. It uses `rustmex::mxArray` directly, so values can move between a MEX function and a MAT-file without another Rust array model.
+`matrust` is a Rust-native safety layer for MATLAB's API-800 Matrix, MEX, and
+MAT-file interfaces. It is not a wrapper around `rustmex`: MATLAB-owned
+arrays, Rust-owned arrays, workspace borrows, and persistent arrays are
+different Rust types with different lifetimes and drop behavior.
 
 ## Requirements
 
-- MATLAB with the C Matrix, MEX, and MAT-file libraries
-- Rust with a supported native C compiler
-- API 800 / interleaved-complex rustmex backend
+- MATLAB with `matrix.h`, `mex.h`, and `mat.h`
+- Rust and a native C compiler supported by MATLAB
+- MATLAB R2025a/API 800 is the current validation target
 
-Only Windows x86_64, MSVC, and MATLAB R2025a have been tested. Linux and macOS build paths are present but unverified.
+Set `MATLABROOT` to the MATLAB installation. The build script links the
+versioned API libraries and compiles the C shim automatically.
 
-## Use
-
-```toml
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-rustmat = "0.1"
-rustmex = { version = "0.6.4", default-features = false, features = ["matlab800", "alloc"] }
-```
+## Example
 
 ```rust
-use rustmat::{MatFile, Matlab, OpenMode};
-use rustmex::prelude::*;
+use matrust::{Inputs, Matlab, Outputs, Result};
 
-rustmat::mex_entrypoint!(run);
+matrust::mex_entrypoint!(run);
 
-fn run(lhs: Lhs, rhs: Rhs) -> rustmex::Result<()> {
-    rustmex::assert!(lhs.len() == 1 && rhs.len() == 1,
-        "example:args", "one input and one output required");
-
-    // SAFETY: this runs synchronously on MATLAB's MEX calling thread, and all
-    // handles and arrays are released or returned before the call ends.
-    let matlab = unsafe { Matlab::attach() };
-
-    let mut file = MatFile::create(&matlab, "data.mat")?;
-    file.put(c"value", rhs[0])?;
-    file.close()?;
-
-    let mut file = MatFile::open(&matlab, "data.mat", OpenMode::Read)?;
-    lhs[0] = Some(file.get(c"value")?);
-    file.close()?;
+fn run<'mex>(cx: &mut Matlab<'mex>, inputs: Inputs<'mex>, out: &mut Outputs<'mex>) -> Result<()> {
+    let value = inputs.get(0).ok_or_else(|| matrust::Error::new(
+        matrust::ErrorKind::InvalidInput, "example", "one input required"))?;
+    out.set(0, cx.call(c"double", &[value], 1)?.pop().unwrap())?;
     Ok(())
 }
 ```
 
-Use `rustmat::mex_entrypoint!` instead of `#[rustmex::entrypoint]`. It lets Rust destroy temporary arrays and close files before MATLAB receives an error. Do not call APIs such as `rustmex::trigger_error!` from inside the handler; return `Err` with `?`.
+`OwnedArray` is the unique Rust owner and destroys its `mxArray` on drop.
+`ArrayRef` is read-only and cannot be destroyed or transferred. A
+`WorkspaceRef` borrows MATLAB workspace memory through `&mut Matlab`, so a
+callback or workspace mutation cannot occur while that pointer is live.
 
-The consuming MEX crate must enable rustmex's `alloc` feature when it creates MATLAB arrays from Rust allocations.
+`MatFile` provides typed open/create, get, metadata, put, global put, delete,
+directory listing, and explicit close. `OwnedArray::persist` provides an
+explicit persistent lifetime with generation-checked keys.
 
-On Windows, set `MATLABROOT` and add the rustmex backend override to the consuming project's `.cargo/config.toml`:
+## Status
 
-```toml
-[target.x86_64-pc-windows-msvc.mex800]
-rustc-link-search = ['C:\Program Files\MATLAB\R2025a\extern\lib\win64\microsoft']
-rustc-link-lib = ["libmx", "libmex", "libmat"]
-```
+The crate is being rebuilt in this repository as `matrust`; the old `rustmat`
+and `rustmex` APIs are intentionally not dependencies. Windows/R2025a is the
+first supported target. See [DESIGN.md](docs/DESIGN.md) for the ownership
+model and [VALIDATION.md](docs/VALIDATION.md) for current checks.
 
-## API
+## License
 
-`MatFile` provides open/create, get, metadata-only info, put, put-as-global, delete, directory listing, raw error status, limited stream diagnostics, and explicit close. `Variables` and `VariableInfos` provide dedicated sequential readers. Creation supports MAT-file versions 4, 6, 7, and 7.3.
-
-`Matlab::attach` is unsafe because the caller must uphold MATLAB's thread, runtime, and array-lifetime rules. File operations are safe after attachment. Metadata-only arrays have a separate type and cannot be returned to MATLAB or written as full arrays.
-
-See [design notes](docs/DESIGN.md) and [validation](docs/VALIDATION.md) for the remaining constraints.
-
-## License and MATLAB
-
-The original code in this repository is licensed under the [MIT License](LICENSE). Dependencies retain their own licenses.
-
-MATLAB, its headers, and its libraries are not included. Users need an appropriate MATLAB license and must follow MathWorks' terms, including the deployment rules for MAT-file applications. MATLAB is a registered trademark of The MathWorks, Inc. This project is independent of MathWorks.
+MIT. MATLAB headers and libraries are not distributed; users must follow
+MathWorks licensing and deployment terms.

@@ -1,12 +1,13 @@
 [package]
-name = "rustmat-integration"
+name = "matrust-integration"
 version = "0.0.0"
 edition = "2021"
 publish = false
 
 [lib]
 crate-type = ["cdylib"]
+test = false
+doctest = false
 
 [dependencies]
-rustmat = { path = "../.." }
-rustmex = { version = "0.6.4", default-features = false, features = ["matlab800", "alloc"] }
+matrust = { path = "../.." }
