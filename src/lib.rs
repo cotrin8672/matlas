@@ -208,11 +208,13 @@ impl<'mex> Matlab<'mex> {
         let mut outputs = vec![std::ptr::null_mut(); output_count];
         let mut raw_inputs: Vec<*mut ffi::RawArray> =
             inputs.iter().map(|v| v.as_ptr().cast_mut()).collect();
+        let input_count = i32::try_from(raw_inputs.len())
+            .map_err(|_| Error::new(ErrorKind::InvalidInput, "call MATLAB", "too many inputs"))?;
         let trap = unsafe {
             ffi::matrust_call_with_trap(
                 count,
                 outputs.as_mut_ptr(),
-                raw_inputs.len() as i32,
+                input_count,
                 raw_inputs.as_mut_ptr(),
                 name.as_ptr(),
             )
