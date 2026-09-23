@@ -85,7 +85,7 @@ pub unsafe fn dispatch(
             1
         }
         Err(payload) => {
-            copy_text(id, "matrust:panic");
+            copy_text(id, "matlas:panic");
             let text = payload
                 .downcast_ref::<String>()
                 .map(String::as_str)

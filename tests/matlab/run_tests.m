@@ -26,25 +26,25 @@ checks = 0;
 for version = 0:4
     data = values;
     if version <= 2, data = basic; end
-    fprintf('MATRUST_STAGE format=%d write\n', version);
-    assert(matrust_integration(1, version, data{:}) == 0);
+    fprintf('MATLAS_STAGE format=%d write\n', version);
+    assert(matlas_integration(1, version, data{:}) == 0);
     verifyFormat('roundtrip.mat', version);
     loaded = load('roundtrip.mat');
     verify(loaded, data);
-    fprintf('MATRUST_STAGE format=%d info\n', version);
-    assert(matrust_integration(3, version, data{:}) == 0);
-    fprintf('MATRUST_STAGE format=%d info_iterator\n', version);
-    assert(matrust_integration(6, version, data{:}) == 0);
+    fprintf('MATLAS_STAGE format=%d info\n', version);
+    assert(matlas_integration(3, version, data{:}) == 0);
+    fprintf('MATLAS_STAGE format=%d info_iterator\n', version);
+    assert(matlas_integration(6, version, data{:}) == 0);
     actual = cell(size(data));
-    fprintf('MATRUST_STAGE format=%d value_iterator\n', version);
-    [actual{:}] = matrust_integration(5, version);
+    fprintf('MATLAS_STAGE format=%d value_iterator\n', version);
+    [actual{:}] = matlas_integration(5, version);
     for i = 1:numel(data), assert(isequaln(actual{i}, data{i})); end
 
     original = struct;
     for i = 1:numel(data), original.(sprintf('v%d', i-1)) = data{i}; end
     save('matlab.mat', '-struct', 'original', saveFlags{version + 1});
-    fprintf('MATRUST_STAGE format=%d MATLAB_to_Rust\n', version);
-    [actual{:}] = matrust_integration(2, version);
+    fprintf('MATLAS_STAGE format=%d MATLAB_to_Rust\n', version);
+    [actual{:}] = matlas_integration(2, version);
     for i = 1:numel(data)
         assert(isequaln(actual{i}, data{i}));
         assert(strcmp(class(actual{i}), class(data{i})));
@@ -52,86 +52,86 @@ for version = 0:4
         assert(issparse(actual{i}) == issparse(data{i}));
     end
 
-    fprintf('MATRUST_STAGE format=%d update\n', version);
-    assert(matrust_integration(4, version, 99) == 0);
+    fprintf('MATLAS_STAGE format=%d update\n', version);
+    assert(matlas_integration(4, version, 99) == 0);
     updated = load('roundtrip.mat');
     assert(updated.v0 == 99 && ~isfield(updated, 'v1'));
-    fprintf('MATRUST_STAGE format=%d failures_empty\n', version);
-    assert(matrust_integration(10, version) == 0);
+    fprintf('MATLAS_STAGE format=%d failures_empty\n', version);
+    assert(matlas_integration(10, version) == 0);
     assert(~isfile('nonexistent.mat'));
     if version >= 3
-        assert(matrust_integration(7, version, [3 4]) == 0);
+        assert(matlas_integration(7, version, [3 4]) == 0);
         clear global global_value
         load('global.mat');
         globalInfo = whos('global_value');
         assert(globalInfo.global);
         assert(isequal(global_value, [3 4]));
         clear global global_value
-        unicode = matrust_integration(9, version, complex([1 2], [3 4]));
+        unicode = matlas_integration(9, version, complex([1 2], [3 4]));
         assert(isequal(unicode, complex([1 2], [3 4])));
         unicodeFile = load(fullfile('日本語😀', '値😀.mat'));
         assert(isequal(unicodeFile.value, unicode));
     end
     checks = checks + numel(data) * 3;
-    fprintf('MATRUST_FORMAT_PASS %d (%d arrays)\n', version, numel(data));
+    fprintf('MATLAS_FORMAT_PASS %d (%d arrays)\n', version, numel(data));
 end
-fprintf('MATRUST_STAGE callback_after_formats\n');
-assert(matrust_integration(21, 3, 2, 5) == 7);
+fprintf('MATLAS_STAGE callback_after_formats\n');
+assert(matlas_integration(21, 3, 2, 5) == 7);
 
 try
-    result = matrust_integration(8, 3, [7 8]); %#ok<NASGU>
-    error('matrust:test:noError', 'Expected an error');
+    result = matlas_integration(8, 3, [7 8]); %#ok<NASGU>
+    error('matlas:test:noError', 'Expected an error');
 catch e
-    assert(strcmp(e.identifier, 'matrust:input:invalid'), e.message);
+    assert(strcmp(e.identifier, 'matlas:input:invalid'), e.message);
 end
 early = load('early.mat');
 assert(isequal(early.saved, [7 8]));
 movefile('early.mat', 'early-closed.mat', 'f');
 try
-    result = matrust_integration(12, 3, [9 10]); %#ok<NASGU>
-    error('matrust:test:noPanic', 'Expected a panic error');
+    result = matlas_integration(12, 3, [9 10]); %#ok<NASGU>
+    error('matlas:test:noPanic', 'Expected a panic error');
 catch e
-    assert(strcmp(e.identifier, 'matrust:panic'), e.message);
+    assert(strcmp(e.identifier, 'matlas:panic'), e.message);
 end
 panicked = load('panic.mat');
 assert(isequal(panicked.saved, [9 10]));
 movefile('panic.mat', 'panic-closed.mat', 'f');
 try
-    matrust_integration(); % NULL/zero-count input and output arrays
-    error('matrust:test:noArgsError', 'Expected an argument error');
+    matlas_integration(); % NULL/zero-count input and output arrays
+    error('matlas:test:noArgsError', 'Expected an argument error');
 catch e
-    assert(strcmp(e.identifier, 'matrust:input:invalid'), e.message);
+    assert(strcmp(e.identifier, 'matlas:input:invalid'), e.message);
 end
 try
-    matrust_integration(13, 3);
-    error('matrust:test:noBufferError', 'Expected a formatted error');
+    matlas_integration(13, 3);
+    error('matlas:test:noBufferError', 'Expected a formatted error');
 catch e
-    assert(strcmp(e.identifier, 'matrust:native'), e.message);
+    assert(strcmp(e.identifier, 'matlas:native'), e.message);
     assert(contains(e.message, '日本語 %s 100%?tail'), e.message);
 end
-fprintf('MATRUST_STAGE callback_after_errors\n');
-assert(matrust_integration(21, 3, 2, 5) == 7);
-matrust_integration(1, 3, basic{:}); % successful zero-output invocation
+fprintf('MATLAS_STAGE callback_after_errors\n');
+assert(matlas_integration(21, 3, 2, 5) == 7);
+matlas_integration(1, 3, basic{:}); % successful zero-output invocation
 from_caller = [10 20 30];
-assert(matrust_integration(11, 3) == 0);
+assert(matlas_integration(11, 3) == 0);
 caller = load('caller.mat');
 assert(isequal(caller.from_caller, from_caller));
 for repeat = 1:25
-    assert(matrust_integration(1, 3, basic{:}) == 0);
+    assert(matlas_integration(1, 3, basic{:}) == 0);
     out = cell(size(basic));
-    [out{:}] = matrust_integration(5, 3);
+    [out{:}] = matlas_integration(5, 3);
     assert(isequal(out, basic));
 end
-fprintf('MATRUST_STAGE callback_after_repeats\n');
-assert(matrust_integration(21, 3, 2, 5) == 7);
-fprintf('MATRUST_STAGE ownership_api\n');
-[madeNumeric, madeString, madeLogical, madeCell, madeSparse] = matrust_integration(14, 3);
+fprintf('MATLAS_STAGE callback_after_repeats\n');
+assert(matlas_integration(21, 3, 2, 5) == 7);
+fprintf('MATLAS_STAGE ownership_api\n');
+[madeNumeric, madeString, madeLogical, madeCell, madeSparse] = matlas_integration(14, 3);
 assert(isequal(madeNumeric, [1 3; 2 4]));
 assert(strcmp(madeString, '日本語'));
 assert(isequal(madeLogical, logical([1 0; 0 1])));
 assert(isequal(madeCell, {42}));
 assert(isequal(madeSparse, sparse([5 0; 0 6])));
-[madeLogicalSparse, mutatedSparse, linearIndex, complexSparse, charMatrix, emptySparse, emptyLogicalSparse] = matrust_integration(15, 3, sparse([1 0; 0 2]));
+[madeLogicalSparse, mutatedSparse, linearIndex, complexSparse, charMatrix, emptySparse, emptyLogicalSparse] = matlas_integration(15, 3, sparse([1 0; 0 2]));
 assert(isequal(madeLogicalSparse, sparse(logical(eye(2)))));
 assert(isequal(mutatedSparse, sparse([5 0; 0 9])));
 assert(linearIndex == 3); % zero-based linear index for zero-based [1, 1]
@@ -139,58 +139,58 @@ assert(isequal(complexSparse, sparse([1+2i 0; 0 7+4i])));
 assert(isequal(charMatrix, ['ab'; 'c ']));
 assert(isequal(size(emptySparse), [0 3]) && issparse(emptySparse));
 assert(isequal(size(emptyLogicalSparse), [0 3]) && issparse(emptyLogicalSparse) && islogical(emptyLogicalSparse));
-fprintf('MATRUST_STAGE callback_after_ownership\n');
-assert(matrust_integration(21, 3, 2, 5) == 7);
-fprintf('MATRUST_STAGE persistent_cross_invocation\n');
-assert(matrust_integration(16, 3, 123.5) == 0);
-assert(matrust_integration(17, 3) == 123.5);
-assert(matrust_integration(17, 3) == 123.5);
-assert(matrust_integration(18, 3) == 0);
+fprintf('MATLAS_STAGE callback_after_ownership\n');
+assert(matlas_integration(21, 3, 2, 5) == 7);
+fprintf('MATLAS_STAGE persistent_cross_invocation\n');
+assert(matlas_integration(16, 3, 123.5) == 0);
+assert(matlas_integration(17, 3) == 123.5);
+assert(matlas_integration(17, 3) == 123.5);
+assert(matlas_integration(18, 3) == 0);
 try
-    matrust_integration(17, 3);
-    error('matrust:test:noPersistentError', 'Expected a missing persistent value error');
+    matlas_integration(17, 3);
+    error('matlas:test:noPersistentError', 'Expected a missing persistent value error');
 catch e
-    assert(strcmp(e.identifier, 'matrust:input:invalid'), e.message);
+    assert(strcmp(e.identifier, 'matlas:input:invalid'), e.message);
 end
-fprintf('MATRUST_STAGE callback_after_persistent\n');
-assert(matrust_integration(21, 3, 2, 5) == 7);
-fprintf('MATRUST_STAGE module_lock_raii\n');
-assert(matrust_integration(19, 3) == 1);
-assert(matrust_integration(1, 3, basic{:}) == 0);
-assert(matrust_integration(20, 3) == 0);
-fprintf('MATRUST_STAGE callback_after_lock\n');
-assert(matrust_integration(21, 3, 2, 5) == 7);
-fprintf('MATRUST_STAGE trapped_callbacks\n');
-assert(matrust_integration(21, 3, 2, 5) == 7);
-assert(numel(matrust_integration(24, 3)) == 6);
-assert(matrust_integration(25, 3) == 0);
-[emptyStruct, madeStruct] = matrust_integration(26, 3);
+fprintf('MATLAS_STAGE callback_after_persistent\n');
+assert(matlas_integration(21, 3, 2, 5) == 7);
+fprintf('MATLAS_STAGE module_lock_raii\n');
+assert(matlas_integration(19, 3) == 1);
+assert(matlas_integration(1, 3, basic{:}) == 0);
+assert(matlas_integration(20, 3) == 0);
+fprintf('MATLAS_STAGE callback_after_lock\n');
+assert(matlas_integration(21, 3, 2, 5) == 7);
+fprintf('MATLAS_STAGE trapped_callbacks\n');
+assert(matlas_integration(21, 3, 2, 5) == 7);
+assert(numel(matlas_integration(24, 3)) == 6);
+assert(matlas_integration(25, 3) == 0);
+[emptyStruct, madeStruct] = matlas_integration(26, 3);
 assert(isstruct(emptyStruct) && isempty(fieldnames(emptyStruct)));
 assert(isequal(fieldnames(madeStruct), {'kept'; 'extra'}));
 assert(madeStruct.kept == 42 && strcmp(madeStruct.extra, 'ok'));
-converted = matrust_integration(27, 3);
+converted = matlas_integration(27, 3);
 assert(isequal(size(converted), [1 4]) && isequal(converted, [1 2 3 4]) && isreal(converted));
 from_caller_scalar = 9;
-assert(matrust_integration(28, 3) == 10);
+assert(matlas_integration(28, 3) == 10);
 assert(from_rust == 10);
-object = MatrustTestObject;
+object = MatlasTestObject;
 object.Value = 11;
-assert(matrust_integration(29, 3, object) == 22);
+assert(matlas_integration(29, 3, object) == 22);
 try
-    matrust_integration(22, 3);
-    error('matrust:test:noCallbackError', 'Expected a trapped call error');
+    matlas_integration(22, 3);
+    error('matlas:test:noCallbackError', 'Expected a trapped call error');
 catch e
-    assert(strcmp(e.identifier, 'matrust:callback'), e.message);
+    assert(strcmp(e.identifier, 'matlas:callback'), e.message);
     assert(contains(e.message, 'intentional callback failure'), e.message);
 end
 try
-    matrust_integration(23, 3);
-    error('matrust:test:noEvalError', 'Expected a trapped eval error');
+    matlas_integration(23, 3);
+    error('matlas:test:noEvalError', 'Expected a trapped eval error');
 catch e
-    assert(strcmp(e.identifier, 'matrust:callback'), e.message);
+    assert(strcmp(e.identifier, 'matlas:callback'), e.message);
     assert(contains(e.message, 'intentional eval failure'), e.message);
 end
-fprintf('MATRUST_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks\n', checks);
+fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks\n', checks);
 end
 
 function verifyFormat(path, version)

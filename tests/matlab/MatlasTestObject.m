@@ -1,4 +1,4 @@
-classdef MatrustTestObject
+classdef MatlasTestObject
     properties
         Value
     end

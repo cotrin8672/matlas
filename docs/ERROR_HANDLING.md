@@ -1,6 +1,6 @@
 # Error handling
 
-Safe handlers should return `matrust::Result<()>` and propagate failures with
+Safe handlers should return `matlas::Result<()>` and propagate failures with
 `?`. The entrypoint waits until the handler and all of its Rust frames have
 returned before the C shim calls `mexErrMsgIdAndTxt`, so ordinary `Result`
 errors and panics run Rust destructors first.
@@ -26,5 +26,5 @@ Rust error.
 
 Non-trapping callbacks, MATLAB error functions, pointer adoption, allocator
 replacement, and other operations that can bypass the ownership model are only
-available in `matrust::raw`. Safe code must not mix raw mutations with live safe
+available in `matlas::raw`. Safe code must not mix raw mutations with live safe
 owners or borrows.

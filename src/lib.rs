@@ -476,7 +476,7 @@ impl Workspace {
 /// borrow of [`Matlab`], so a callback or workspace mutation cannot invalidate it.
 ///
 /// ```compile_fail
-/// # use matrust::{Matlab, Workspace};
+/// # use matlas::{Matlab, Workspace};
 /// fn invalid(cx: &mut Matlab<'_>) {
 ///     let view = cx.workspace_borrow(Workspace::Caller, c"x").unwrap();
 ///     let _ = cx.eval("clear x");
@@ -929,7 +929,7 @@ impl FileStream<'_> {
 /// non-dereferenceable sentinels in its data pointers.
 ///
 /// ```compile_fail
-/// # use matrust::ArrayInfo;
+/// # use matlas::ArrayInfo;
 /// fn cannot_read_data(info: &ArrayInfo<'_>) {
 ///     let _ = info.as_ref().data::<f64>();
 /// }

@@ -1,6 +1,8 @@
 # Validation
 
 Current local checks use MATLAB R2025a/API 800, MSVC, and Rust 1.95:
+The declared Rust 1.77 minimum was also checked by building both `matlas` and
+the `matlas-integration` MEX crate with `cargo +1.77.0 build --locked`.
 
 ```powershell
 $env:MATLABROOT = 'C:\Program Files\MATLAB\R2025a'
@@ -9,8 +11,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 $env:RUSTDOCFLAGS = '-D warnings'
 cargo doc --workspace --no-deps
 powershell -File scripts/audit_api.ps1
-cargo build -p matrust-integration
-Copy-Item target/debug/matrust_integration.dll target/debug/matrust_integration.mexw64 -Force
+cargo build -p matlas-integration
+Copy-Item target/debug/matlas_integration.dll target/debug/matlas_integration.mexw64 -Force
 & "$env:MATLABROOT\bin\matlab.exe" -batch "addpath('$((Resolve-Path tests/matlab).Path -replace '\\','/')'); run_tests('$((Resolve-Path .).Path -replace '\\','/')')"
 ```
 

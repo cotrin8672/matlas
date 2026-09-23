@@ -19,17 +19,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
 
 [[package]]
-name = "matrust"
+name = "matlas"
 version = "0.4.0"
 dependencies = [
  "cc",
 ]
 
 [[package]]
-name = "matrust-integration"
+name = "matlas-integration"
 version = "0.0.0"
 dependencies = [
- "matrust",
+ "matlas",
 ]
 
 [[package]]

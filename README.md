@@ -1,6 +1,6 @@
-# matrust
+# matlas
 
-`matrust` is a Rust-native safety layer for MATLAB's API-800 Matrix, MEX, and
+`matlas` is a Rust-native safety layer for MATLAB's API-800 Matrix, MEX, and
 MAT-file interfaces. It is not a wrapper around `rustmex`: MATLAB-owned
 arrays, Rust-owned arrays, workspace borrows, and persistent arrays are
 different Rust types with different lifetimes and drop behavior.
@@ -17,14 +17,14 @@ versioned API libraries and compiles the C shim automatically.
 ## Example
 
 ```rust
-use matrust::{Inputs, Matlab, Outputs, Result};
+use matlas::{Inputs, Matlab, Outputs, Result};
 
-matrust::mex_entrypoint!(run);
+matlas::mex_entrypoint!(run);
 
 fn run<'mex>(cx: &mut Matlab<'mex>, inputs: Inputs<'mex>, out: &mut Outputs<'mex>) -> Result<()> {
-    let value = inputs.get(0).ok_or_else(|| matrust::Error::new(
-        matrust::ErrorKind::InvalidInput, "example", "one input required"))?;
-    out.set(0, cx.call(c"double", &[value], 1)?.pop().unwrap())?;
+    let value = inputs.get(0).ok_or_else(|| matlas::Error::new(
+        matlas::ErrorKind::InvalidInput, "example", "one input required"))?;
+    out.set(0, cx.duplicate(value)?)?;
     Ok(())
 }
 ```
@@ -41,12 +41,11 @@ it again requires the new invocation's `Matlab` context.
 
 ## Status
 
-The crate is being rebuilt in this repository as `matrust`; the old `rustmat`
-and `rustmex` APIs are intentionally not dependencies. Windows/R2025a is the
-first supported target. The R2025a/API-800 audit covers all 178 published C
+The old `rustmat` and `rustmex` APIs are intentionally not dependencies.
+Windows/R2025a is the first supported target. The R2025a/API-800 audit covers all 178 published C
 functions: safe operations use lifetime-aware types, aliases use a more general
 safe operation, and ownership-adopting or non-local-exit operations remain
-explicitly unsafe in `matrust::raw`. See [API_COVERAGE.md](docs/API_COVERAGE.md)
+explicitly unsafe in `matlas::raw`. See [API_COVERAGE.md](docs/API_COVERAGE.md)
 for the function-by-function inventory, [DESIGN.md](docs/DESIGN.md) for the
 ownership model, [ERROR_HANDLING.md](docs/ERROR_HANDLING.md) for what `Result`
 can and cannot catch, and [VALIDATION.md](docs/VALIDATION.md) for current checks.

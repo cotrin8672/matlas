@@ -9,7 +9,7 @@ is not referenced by the C shim. The current baseline is 178 of 178 functions:
 “Safe” means the operation is available through the ownership- and
 lifetime-aware Rust API. “Alias” means a more general safe Rust operation has
 the same capability. “Raw” means the exact operation is exported by
-`matrust::raw`, but cannot soundly be made safe without additional invariants.
+`matlas::raw`, but cannot soundly be made safe without additional invariants.
 Raw pointer-adoption functions require MATLAB-allocated storage of exactly the
 right layout and transfer its ownership to an `mxArray`. Non-trapping MEX error
 and callback functions can bypass Rust destructors, so they also remain raw.

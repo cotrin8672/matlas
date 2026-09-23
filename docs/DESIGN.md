@@ -1,6 +1,6 @@
 # Design
 
-`matrust` makes MATLAB's ownership conventions visible in Rust's type system.
+`matlas` makes MATLAB's ownership conventions visible in Rust's type system.
 The C shim is private; safe callers never manipulate an `mxArray*` directly.
 
 ## Ownership categories

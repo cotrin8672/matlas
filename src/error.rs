@@ -117,19 +117,19 @@ impl Error {
     /// Return the stable MATLAB exception identifier for this category.
     pub fn id(&self) -> &'static str {
         match self.kind {
-            ErrorKind::InvalidInput => "matrust:input:invalid",
-            ErrorKind::Type => "matrust:array:type",
-            ErrorKind::Bounds => "matrust:array:bounds",
-            ErrorKind::Allocation => "matrust:allocation",
-            ErrorKind::Callback => "matrust:callback",
-            ErrorKind::Workspace => "matrust:workspace",
-            ErrorKind::Busy => "matrust:runtime:busy",
-            ErrorKind::InvalidMode => "matrust:file:mode",
-            ErrorKind::Open => "matrust:file:open",
-            ErrorKind::Read | ErrorKind::UnexpectedEnd => "matrust:file:read",
-            ErrorKind::Write => "matrust:file:write",
-            ErrorKind::Close => "matrust:file:close",
-            ErrorKind::Native => "matrust:native",
+            ErrorKind::InvalidInput => "matlas:input:invalid",
+            ErrorKind::Type => "matlas:array:type",
+            ErrorKind::Bounds => "matlas:array:bounds",
+            ErrorKind::Allocation => "matlas:allocation",
+            ErrorKind::Callback => "matlas:callback",
+            ErrorKind::Workspace => "matlas:workspace",
+            ErrorKind::Busy => "matlas:runtime:busy",
+            ErrorKind::InvalidMode => "matlas:file:mode",
+            ErrorKind::Open => "matlas:file:open",
+            ErrorKind::Read | ErrorKind::UnexpectedEnd => "matlas:file:read",
+            ErrorKind::Write => "matlas:file:write",
+            ErrorKind::Close => "matlas:file:close",
+            ErrorKind::Native => "matlas:native",
         }
     }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "matrust-integration"
+name = "matlas-integration"
 version = "0.0.0"
 edition = "2021"
 publish = false
@@ -10,4 +10,4 @@ test = false
 doctest = false
 
 [dependencies]
-matrust = { path = "../.." }
+matlas = { path = "../.." }

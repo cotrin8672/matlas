@@ -1,6 +1,6 @@
 # Releasing
 
-1. Set `CREATE_IO_API_KEY` in the GitHub repository's Actions secrets to a crates.io API token limited to this crate.
+1. Set `CREATE_IO_API_KEY` in the GitHub repository's Actions secrets to a crates.io API token with `publish-new` permission for the first release. Afterward, replace it with a token limited to `matlas` updates. The secret must exist before publishing the GitHub release.
 2. Update the version in `Cargo.toml` and `Cargo.lock`.
 3. With MATLAB configured, run the Rust checks and `tests/matlab/run_tests.m` documented in [VALIDATION.md](VALIDATION.md).
 4. Run `cargo package --locked` locally and inspect `cargo package --list`.

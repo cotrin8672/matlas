@@ -67,7 +67,7 @@ fn main() {
         .define("TARGET_API_VERSION", "800")
         .define("MATRUST_BUILD_RELEASE", release.to_string().as_str())
         .warnings(true)
-        .compile("matrust800");
+        .compile("matlas800");
     println!("cargo:rustc-link-search=native={}", lib.display());
     for name in ["mat", "mx", "mex"] {
         println!("cargo:rustc-link-lib={prefix}{name}");

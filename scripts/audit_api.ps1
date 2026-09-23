@@ -72,7 +72,7 @@ try {
     $mat = @($declared | Where-Object { $_ -cmatch '^mat[A-Z]' }).Count
     $mex = @($declared | Where-Object { $_ -cmatch '^mex[A-Z]' }).Count
     $matrix = @($declared | Where-Object { $_ -cmatch '^mx[A-Z]' }).Count
-    Write-Output "MATRUST_API_COVERAGE_PASS total=$($declared.Count) mat=$mat mex=$mex matrix=$matrix"
+    Write-Output "MATLAS_API_COVERAGE_PASS total=$($declared.Count) mat=$mat mex=$mex matrix=$matrix"
 }
 finally {
     Remove-Item -LiteralPath $astFile -ErrorAction SilentlyContinue

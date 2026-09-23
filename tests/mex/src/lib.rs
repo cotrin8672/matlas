@@ -1,15 +1,15 @@
-use matrust::{
+use matlas::{
     Complex, Error, ErrorKind, Inputs, MatFile, MatVersion, Matlab, OpenMode, Outputs, Result,
     VariableInfos, Variables, Workspace,
 };
 use std::{cell::RefCell, ffi::CString};
 
 thread_local! {
-    static PERSISTENT: RefCell<Option<matrust::PersistentArray>> = const { RefCell::new(None) };
-    static MODULE_LOCK: RefCell<Option<matrust::ModuleLock>> = const { RefCell::new(None) };
+    static PERSISTENT: RefCell<Option<matlas::PersistentArray>> = const { RefCell::new(None) };
+    static MODULE_LOCK: RefCell<Option<matlas::ModuleLock>> = const { RefCell::new(None) };
 }
 
-matrust::mex_entrypoint!(run);
+matlas::mex_entrypoint!(run);
 
 fn run<'mex>(
     cx: &mut Matlab<'mex>,
@@ -284,7 +284,7 @@ fn run<'mex>(
             cx.call(c"error", &[message.as_ref()], 0)?;
         }
         23 => {
-            cx.eval("error('matrust:nativeTest','intentional eval failure')")?;
+            cx.eval("error('matlas:nativeTest','intentional eval failure')")?;
         }
         24 => {
             let value = cx

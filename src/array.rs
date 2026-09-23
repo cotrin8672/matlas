@@ -108,7 +108,7 @@ pub trait Numeric: sealed::Sealed + Copy + 'static {
 /// sparse element types a compile-time error instead of a runtime failure.
 ///
 /// ```compile_fail
-/// # use matrust::Matlab;
+/// # use matlas::Matlab;
 /// fn integer_sparse(cx: &Matlab<'_>) {
 ///     let _ = cx.sparse(1, 1, &[0, 1], &[0], &[1_i32]);
 /// }
