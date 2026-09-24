@@ -31,8 +31,21 @@ fn run<'mex>(cx: &mut Matlab<'mex>, inputs: Inputs<'mex>, out: &mut Outputs<'mex
 
 `OwnedArray` is the unique Rust owner and destroys its `mxArray` on drop.
 `ArrayRef` is read-only and cannot be destroyed or transferred. A
-`WorkspaceRef` borrows MATLAB workspace memory through `&mut Matlab`, so a
-callback or workspace mutation cannot occur while that pointer is live.
+`WorkspaceScope::get` borrows MATLAB workspace memory without copying it. A
+scope can fetch several `WorkspaceValue`s and pass them, with ordinary array
+views, to `WorkspaceScope::call`. The call consumes the scope and the passed
+values; it rejects any workspace values left live outside the call.
+
+```rust,no_run
+# use matlas::{ArrayRef, Matlab, Result, Workspace};
+fn sum<'mex>(cx: &mut Matlab<'mex>, id: ArrayRef<'mex>) -> Result<()> {
+    let ws = cx.workspace_scope(Workspace::Caller);
+    let f = ws.get(c"F")?;
+    let detuning = ws.get(c"detuning")?;
+    let _outputs = ws.call(c"store.findRecord", [id.into(), f.into(), detuning.into()], 2)?;
+    Ok(())
+}
+```
 
 `MatFile` provides typed open/create, get, metadata, put, global put, delete,
 directory listing, and explicit close. `OwnedArray::persist` returns a

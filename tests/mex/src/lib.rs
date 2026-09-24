@@ -353,7 +353,8 @@ fn run<'mex>(
         }
         28 => {
             let scalar = {
-                let value = cx.workspace_borrow(Workspace::Caller, c"from_caller_scalar")?;
+                let ws = cx.workspace_scope(Workspace::Caller);
+                let value = ws.get(c"from_caller_scalar")?;
                 value.as_ref().scalar()?
             };
             let value = cx.scalar(scalar + 1.0)?;
@@ -385,6 +386,42 @@ fn run<'mex>(
                 .set_property(0, c"Value", replacement.as_ref())?;
             outputs.set(0, object.property(0, c"Value")?)?;
         }
+        30 => {
+            let ws = cx.workspace_scope(Workspace::Caller);
+            let left = ws.get(c"from_caller_scalar")?;
+            let right = ws.get(c"second_caller_scalar")?;
+            let value = ws
+                .call(c"plus", [left.into(), right.into()], 1)?
+                .pop()
+                .unwrap();
+            outputs.set(0, value)?;
+        }
+        31 => {
+            let input = inputs.get(2).unwrap();
+            let ws = cx.workspace_scope(Workspace::Caller);
+            let value = ws.get(c"from_caller_scalar")?;
+            let value = ws
+                .call(c"plus", [input.into(), value.into()], 1)?
+                .pop()
+                .unwrap();
+            outputs.set(0, value)?;
+        }
+        32 => {
+            let ws = cx.workspace_scope(Workspace::Caller);
+            let passed = ws.get(c"from_caller_scalar")?;
+            let unused = ws.get(c"second_caller_scalar")?;
+            let result = ws.call(c"plus", [passed.into()], 1);
+            if !matches!(result, Err(ref error) if error.kind == ErrorKind::Busy) {
+                return Err(Error::new(
+                    ErrorKind::Native,
+                    "workspace scope",
+                    "unused value was not rejected",
+                ));
+            }
+            let scalar = unused.as_ref().scalar()?;
+            drop(unused);
+            outputs.set(0, cx.scalar(scalar)?)?;
+        }
         _ => {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -396,7 +433,7 @@ fn run<'mex>(
     if !outputs.is_empty()
         && !matches!(
             command,
-            2 | 5 | 9 | 14 | 15 | 17 | 19 | 20 | 21 | 24 | 26 | 27 | 28 | 29
+            2 | 5 | 9 | 14 | 15 | 17 | 19 | 20 | 21 | 24 | 26 | 27 | 28 | 29 | 30 | 31 | 32
         )
     {
         outputs.set(0, cx.scalar(0.0)?)?;

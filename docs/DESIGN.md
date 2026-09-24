@@ -10,9 +10,12 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
   struct. It has no destructor and cannot be transferred to MATLAB.
 - `ArrayMut<'a, 'mex>` is an exclusive borrow of an owned array. Replacing a
   cell/field consumes an `OwnedArray`, making transfer explicit.
-- `WorkspaceRef<'a>` models `mexGetVariablePtr`; it borrows `&mut Matlab` and
-  holds a runtime guard. Calls that may invalidate MATLAB-owned pointers are
-  rejected while it is alive.
+- `WorkspaceScope<'a, 'mex>` exclusively borrows `Matlab` while multiple
+  `WorkspaceValue<'a>` pointers from `mexGetVariablePtr` are fetched. Its
+  consuming `call` accepts workspace values and ordinary `ArrayRef` inputs in
+  argument order. Workspace values are moved and released immediately before
+  `mexCallMATLABWithTrap`; a live value omitted from the call is rejected by
+  the runtime guard. After the callback, old workspace pointers cannot be read.
 - `PersistentArray` owns a generation-checked persistent slot and may be stored
   between MEX invocations. Reading, mutating, or explicitly removing it
   requires the current invocation's `Matlab<'mex>` context. Dropping it

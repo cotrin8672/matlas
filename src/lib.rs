@@ -1,8 +1,8 @@
 //! Safe, lifetime-aware Rust bindings for MATLAB's Matrix, MEX and MAT-file APIs.
 //!
 //! The safe API has three ownership categories: [`OwnedArray`] is destroyed by
-//! Rust, [`ArrayRef`] is a read-only borrow, and [`WorkspaceRef`] is a borrow of
-//! MATLAB workspace memory that also prevents calls which may invalidate it.
+//! Rust, [`ArrayRef`] is a read-only borrow, and [`WorkspaceValue`] is a
+//! MATLAB workspace pointer valid until the next MATLAB callback.
 
 #![deny(missing_docs)]
 #![deny(clippy::missing_errors_doc)]
@@ -276,32 +276,13 @@ impl<'mex> Matlab<'mex> {
             })
     }
 
-    /// Borrow a MATLAB-owned workspace variable.
-    ///
-    /// The mutable context borrow prevents callbacks and workspace mutations
-    /// while the returned pointer may be invalidated by MATLAB.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the named variable does not exist.
-    pub fn workspace_borrow<'a>(
-        &'a mut self,
-        space: Workspace,
-        name: &CStr,
-    ) -> Result<WorkspaceRef<'a>> {
-        let raw = unsafe { ffi::matrust_workspace_borrow(space.as_ptr(), name.as_ptr()) };
-        let raw = NonNull::new(raw.cast_mut()).ok_or_else(|| {
-            Error::new(
-                ErrorKind::Workspace,
-                "borrow workspace variable",
-                format!("{name:?}"),
-            )
-        })?;
-        Ok(WorkspaceRef {
-            raw,
-            _guard: runtime::begin_external_borrow(),
-            _context: PhantomData,
-        })
+    /// Open a scope for borrowing multiple variables from one MATLAB workspace.
+    /// The scope must be consumed to pass those pointers into a callback.
+    pub fn workspace_scope(&mut self, space: Workspace) -> WorkspaceScope<'_, 'mex> {
+        WorkspaceScope {
+            space,
+            _context: self,
+        }
     }
 
     /// Copy a borrowed array into a MATLAB workspace.
@@ -339,69 +320,11 @@ impl<'mex> Matlab<'mex> {
         output_count: usize,
     ) -> Result<Vec<OwnedArray<'mex>>> {
         runtime::require_unborrowed("call MATLAB")?;
-        if output_count > 50 || inputs.len() > 50 {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "call MATLAB",
-                "MATLAB callbacks support at most 50 inputs and 50 outputs",
-            ));
-        }
-        let count = i32::try_from(output_count)
-            .map_err(|_| Error::new(ErrorKind::InvalidInput, "call MATLAB", "too many outputs"))?;
-        let mut outputs = vec![std::ptr::null_mut(); output_count];
-        let mut raw_inputs: Vec<*mut ffi::RawArray> =
-            inputs.iter().map(|v| v.as_ptr().cast_mut()).collect();
-        let input_count = i32::try_from(raw_inputs.len())
-            .map_err(|_| Error::new(ErrorKind::InvalidInput, "call MATLAB", "too many inputs"))?;
-        let outputs_ptr = if outputs.is_empty() {
-            std::ptr::null_mut()
-        } else {
-            outputs.as_mut_ptr()
-        };
-        let inputs_ptr = if raw_inputs.is_empty() {
-            std::ptr::null_mut()
-        } else {
-            raw_inputs.as_mut_ptr()
-        };
-        let trap = unsafe {
-            ffi::matrust_call_with_trap(count, outputs_ptr, input_count, inputs_ptr, name.as_ptr())
-        };
-        if let Some(trap) = NonNull::new(trap) {
-            for raw in outputs {
-                if !raw.is_null() {
-                    unsafe { ffi::matrust_array_destroy(raw) }
-                }
-            }
-            return Err(callback_error(
-                trap,
-                "call MATLAB",
-                format!("{name:?} failed without exception details"),
-            ));
-        }
-        if outputs.iter().any(|raw| raw.is_null()) {
-            for raw in outputs {
-                if !raw.is_null() {
-                    unsafe { ffi::matrust_array_destroy(raw) }
-                }
-            }
-            return Err(Error::new(
-                ErrorKind::Callback,
-                "call MATLAB",
-                "MATLAB returned a null output",
-            ));
-        }
-        let mut result = Vec::with_capacity(output_count);
-        for raw in outputs {
-            let raw = NonNull::new(raw).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Callback,
-                    "call MATLAB",
-                    "MATLAB returned a null output",
-                )
-            })?;
-            result.push(unsafe { OwnedArray::from_raw(raw) });
-        }
-        Ok(result)
+        call_raw(
+            name,
+            inputs.iter().map(|v| v.as_ptr().cast_mut()).collect(),
+            output_count,
+        )
     }
 
     /// Evaluate MATLAB source through the trapping API.
@@ -430,6 +353,74 @@ impl<'mex> Matlab<'mex> {
             Ok(())
         }
     }
+}
+
+fn call_raw<'mex>(
+    name: &CStr,
+    mut raw_inputs: Vec<*mut ffi::RawArray>,
+    output_count: usize,
+) -> Result<Vec<OwnedArray<'mex>>> {
+    if output_count > 50 || raw_inputs.len() > 50 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "call MATLAB",
+            "MATLAB callbacks support at most 50 inputs and 50 outputs",
+        ));
+    }
+    let count = i32::try_from(output_count)
+        .map_err(|_| Error::new(ErrorKind::InvalidInput, "call MATLAB", "too many outputs"))?;
+    let mut outputs = vec![std::ptr::null_mut(); output_count];
+    let input_count = i32::try_from(raw_inputs.len())
+        .map_err(|_| Error::new(ErrorKind::InvalidInput, "call MATLAB", "too many inputs"))?;
+    let outputs_ptr = if outputs.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        outputs.as_mut_ptr()
+    };
+    let inputs_ptr = if raw_inputs.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        raw_inputs.as_mut_ptr()
+    };
+    let trap = unsafe {
+        ffi::matrust_call_with_trap(count, outputs_ptr, input_count, inputs_ptr, name.as_ptr())
+    };
+    if let Some(trap) = NonNull::new(trap) {
+        for raw in outputs {
+            if !raw.is_null() {
+                unsafe { ffi::matrust_array_destroy(raw) }
+            }
+        }
+        return Err(callback_error(
+            trap,
+            "call MATLAB",
+            format!("{name:?} failed without exception details"),
+        ));
+    }
+    if outputs.iter().any(|raw| raw.is_null()) {
+        for raw in outputs {
+            if !raw.is_null() {
+                unsafe { ffi::matrust_array_destroy(raw) }
+            }
+        }
+        return Err(Error::new(
+            ErrorKind::Callback,
+            "call MATLAB",
+            "MATLAB returned a null output",
+        ));
+    }
+    let mut result = Vec::with_capacity(output_count);
+    for raw in outputs {
+        let raw = NonNull::new(raw).ok_or_else(|| {
+            Error::new(
+                ErrorKind::Callback,
+                "call MATLAB",
+                "MATLAB returned a null output",
+            )
+        })?;
+        result.push(unsafe { OwnedArray::from_raw(raw) });
+    }
+    Ok(result)
 }
 
 fn callback_error(raw: NonNull<ffi::RawArray>, operation: &'static str, fallback: String) -> Error {
@@ -472,26 +463,120 @@ impl Workspace {
     }
 }
 
-/// A pointer returned by `mexGetVariablePtr`. It cannot outlive the exclusive
-/// borrow of [`Matlab`], so a callback or workspace mutation cannot invalidate it.
+/// An exclusive workspace access period. [`WorkspaceScope::call`] consumes it
+/// and the supplied workspace values before invoking MATLAB.
+pub struct WorkspaceScope<'a, 'mex> {
+    space: Workspace,
+    _context: &'a mut Matlab<'mex>,
+}
+
+impl<'a, 'mex> WorkspaceScope<'a, 'mex> {
+    /// Borrow a workspace variable without copying it. More than one value
+    /// may be fetched before the callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named variable does not exist.
+    pub fn get(&self, name: &CStr) -> Result<WorkspaceValue<'a>> {
+        let raw = unsafe { ffi::matrust_workspace_borrow(self.space.as_ptr(), name.as_ptr()) };
+        let raw = NonNull::new(raw.cast_mut()).ok_or_else(|| {
+            Error::new(
+                ErrorKind::Workspace,
+                "borrow workspace variable",
+                format!("{name:?}"),
+            )
+        })?;
+        Ok(WorkspaceValue {
+            raw,
+            _guard: runtime::begin_external_borrow(),
+            _context: PhantomData,
+        })
+    }
+
+    /// Call MATLAB with borrowed workspace values and ordinary array views in
+    /// argument order. Each workspace value must be moved into `inputs`. An
+    /// unused live value causes an error before MATLAB is called.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unused live workspace value, more than 50
+    /// inputs or outputs, a trapped MATLAB exception, or a null output.
+    pub fn call(
+        self,
+        name: &CStr,
+        inputs: impl IntoIterator<Item = CallInput<'a>>,
+        output_count: usize,
+    ) -> Result<Vec<OwnedArray<'mex>>> {
+        let inputs: Vec<_> = inputs.into_iter().collect();
+        let raw = inputs.iter().map(CallInput::as_ptr).collect();
+        drop(inputs);
+        runtime::require_unborrowed("call MATLAB")?;
+        call_raw(name, raw, output_count)
+    }
+}
+
+/// A pointer returned by `mexGetVariablePtr`. It can be read until it is
+/// consumed by [`WorkspaceScope::call`] or dropped.
 ///
 /// ```compile_fail
 /// # use matlas::{Matlab, Workspace};
 /// fn invalid(cx: &mut Matlab<'_>) {
-///     let view = cx.workspace_borrow(Workspace::Caller, c"x").unwrap();
-///     let _ = cx.eval("clear x");
-///     let _ = view.as_ref().numel();
+///     let ws = cx.workspace_scope(Workspace::Caller);
+///     let value = ws.get(c"x").unwrap();
+///     let _ = ws.call(c"disp", [value.into()], 0);
+///     let _ = value.as_ref().numel();
 /// }
 /// ```
-pub struct WorkspaceRef<'a> {
+///
+/// ```compile_fail
+/// # use matlas::{Matlab, Workspace};
+/// fn invalid(cx: &mut Matlab<'_>) {
+///     let ws = cx.workspace_scope(Workspace::Caller);
+///     let value = ws.get(c"x").unwrap();
+///     drop(ws);
+///     let _ = cx.eval("clear x");
+///     let _ = value.as_ref().numel();
+/// }
+/// ```
+pub struct WorkspaceValue<'a> {
     raw: NonNull<ffi::RawArray>,
     _guard: runtime::ExternalBorrowGuard,
-    _context: PhantomData<&'a mut Matlab<'a>>,
+    _context: PhantomData<&'a Matlab<'a>>,
 }
-impl WorkspaceRef<'_> {
+impl WorkspaceValue<'_> {
     /// Borrow the referenced MATLAB-owned array.
     pub fn as_ref(&self) -> ArrayRef<'_> {
         unsafe { ArrayRef::from_raw(self.raw) }
+    }
+}
+
+/// One MATLAB callback input, either an ordinary view or a consumed workspace
+/// pointer. Use `into()` to assemble a mixed argument list.
+pub enum CallInput<'a> {
+    /// A borrowed array from a MEX input or an owned array.
+    Borrowed(ArrayRef<'a>),
+    /// A workspace pointer borrowed without copying.
+    Workspace(WorkspaceValue<'a>),
+}
+
+impl<'a> From<ArrayRef<'a>> for CallInput<'a> {
+    fn from(value: ArrayRef<'a>) -> Self {
+        Self::Borrowed(value)
+    }
+}
+
+impl<'a> From<WorkspaceValue<'a>> for CallInput<'a> {
+    fn from(value: WorkspaceValue<'a>) -> Self {
+        Self::Workspace(value)
+    }
+}
+
+impl CallInput<'_> {
+    fn as_ptr(&self) -> *mut ffi::RawArray {
+        match self {
+            Self::Borrowed(value) => value.as_ptr().cast_mut(),
+            Self::Workspace(value) => value.raw.as_ptr(),
+        }
     }
 }
 

@@ -33,8 +33,8 @@ point implemented by `mex_entrypoint!`, not an API function called by users.
 
 | Disposition | MATLAB functions | Rust API |
 | --- | --- | --- |
-| Safe | `mexCallMATLABWithTrap`, `mexEvalStringWithTrap` | `Matlab::call`, `Matlab::eval` |
-| Safe | `mexGetVariable`, `mexGetVariablePtr`, `mexPutVariable` | `Matlab::workspace_get`, `workspace_borrow`, `workspace_put` |
+| Safe | `mexCallMATLABWithTrap`, `mexEvalStringWithTrap` | `Matlab::call`, `WorkspaceScope::call`, `Matlab::eval` |
+| Safe | `mexGetVariable`, `mexGetVariablePtr`, `mexPutVariable` | `Matlab::workspace_get`, `workspace_scope` / `WorkspaceScope::get`, `workspace_put` |
 | Safe | `mexFunctionName`, `mexPrintf`, `mexWarnMsgIdAndTxt` | `Matlab::function_name`, `printf`, `warning` |
 | Safe | `mexLock`, `mexUnlock`, `mexIsLocked` | RAII `Matlab::lock` / `ModuleLock`, and `is_locked` |
 | Safe/internal | `mexAtExit`, `mexMakeArrayPersistent` | persistent-array registry |
@@ -83,7 +83,7 @@ point implemented by `mex_entrypoint!`, not an API function called by users.
 ## Raw safety contract
 
 The `raw` module intentionally does not construct `OwnedArray`, `ArrayRef`, or
-`WorkspaceRef`. A caller must uphold all MATLAB requirements: correct API-800
+`WorkspaceValue`. A caller must uphold all MATLAB requirements: correct API-800
 layout, main-thread execution, valid pointers and lengths, exclusive mutation,
 allocator pairing, ownership transfer, callback invalidation, and the fact that
 MATLAB error functions may not unwind Rust frames. Safe code should never mix a

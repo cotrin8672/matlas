@@ -4,6 +4,9 @@ Current local checks use MATLAB R2025a/API 800, MSVC, and Rust 1.95:
 The declared Rust 1.77 minimum was also checked by building both `matlas` and
 the `matlas-integration` MEX crate with `cargo +1.77.0 build --locked`.
 
+The v0.5.0 workspace-scope callback cases passed the full MATLAB suite on
+R2024a on 2026-09-24. The v0.5.0 workspace also built with Rust 1.77.0.
+
 ```powershell
 $env:MATLABROOT = 'C:\Program Files\MATLAB\R2025a'
 cargo test --workspace

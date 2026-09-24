@@ -173,6 +173,10 @@ assert(isequal(size(converted), [1 4]) && isequal(converted, [1 2 3 4]) && isrea
 from_caller_scalar = 9;
 assert(matlas_integration(28, 3) == 10);
 assert(from_rust == 10);
+second_caller_scalar = 5;
+assert(matlas_integration(30, 3) == 14);
+assert(matlas_integration(31, 3, 2) == 11);
+assert(matlas_integration(32, 3) == 5);
 object = MatlasTestObject;
 object.Value = 11;
 assert(matlas_integration(29, 3, object) == 22);
