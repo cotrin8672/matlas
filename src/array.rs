@@ -159,6 +159,50 @@ pub struct ArrayRef<'a> {
     _thread: PhantomData<Rc<()>>,
 }
 
+/// A primitive MATLAB array whose MAT-file serialization does not invoke
+/// user-defined MATLAB code. Cell, struct, string, and object arrays are excluded.
+#[derive(Clone, Copy)]
+pub struct PlainArrayRef<'a>(ArrayRef<'a>);
+
+impl<'a> TryFrom<ArrayRef<'a>> for PlainArrayRef<'a> {
+    type Error = Error;
+
+    fn try_from(value: ArrayRef<'a>) -> Result<Self> {
+        if matches!(
+            value.class(),
+            Some(
+                Class::Logical
+                    | Class::Char
+                    | Class::Double
+                    | Class::Single
+                    | Class::Int8
+                    | Class::Uint8
+                    | Class::Int16
+                    | Class::Uint16
+                    | Class::Int32
+                    | Class::Uint32
+                    | Class::Int64
+                    | Class::Uint64
+            )
+        ) {
+            Ok(Self(value))
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidInput,
+                "classify plain array",
+                "MAT serialization may invoke MATLAB code for this class",
+            ))
+        }
+    }
+}
+
+impl<'a> PlainArrayRef<'a> {
+    /// Return the validated primitive array as a read-only view.
+    pub fn as_ref(self) -> ArrayRef<'a> {
+        self.0
+    }
+}
+
 /// An exclusive array view. Child and data borrows are tied to each method call.
 pub struct ArrayMut<'a, 'mex> {
     raw: NonNull<ffi::RawArray>,
@@ -218,6 +262,7 @@ impl<'mex> OwnedArray<'mex> {
     /// Returns an error for a non-object, an out-of-bounds index, an unknown
     /// or nonpublic property, or a native allocation failure.
     pub fn property(&self, index: usize, name: &CStr) -> Result<Self> {
+        crate::runtime::require_unborrowed("get property")?;
         if index >= self.as_ref().numel() {
             return Err(Error::bounds("get property", index, self.as_ref().numel()));
         }
@@ -1210,6 +1255,7 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     /// `mxSetProperty` operation has no status return; see
     /// [`crate::error_handling`].
     pub fn set_property(&mut self, index: usize, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
+        crate::runtime::require_unborrowed("set property")?;
         if index >= self.as_ref().numel() {
             return Err(Error::bounds("set property", index, self.as_ref().numel()));
         }

@@ -1,12 +1,14 @@
 # Validation
 
-Current v0.6.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.94.1.
+Current v0.7.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.97.1.
 The declared Rust 1.77 minimum was checked by building the full workspace
 with `cargo +1.77.0 build --workspace --locked`.
 
+The v0.7.0 guarded workspace/MAT-file case passed on R2024a on 2026-09-25:
+active workspace values reject property access, generic MAT-file writes, and
+full-value reads; a primitive workspace value writes directly to a v7.3 file.
 The v0.6.0 scalar text, logical scalar, fixed-arity MEX, callback-array, and
-custom error-ID cases passed on R2024a on 2026-09-25. The v0.6.0 workspace
-also built with Rust 1.77.0.
+custom error-ID cases also passed.
 
 ```powershell
 $env:MATLABROOT = 'C:\Program Files\MATLAB\R2024a'
@@ -31,6 +33,7 @@ invocations, and holds/releases an RAII module lock across calls. Linux and
 macOS are not yet validated. Successful and failing trapped function calls,
 plus a failing trapped source evaluation, exercise callback `Result`
 propagation, including zero-input and zero-output calls. The suite also covers
-workspace borrows/copies, owned object properties, structure field ownership,
+workspace borrows/copies, guarded object property access and MAT-file operations,
+primitive zero-copy MAT-file writes, structure field ownership,
 reshape and real/complex conversion, metadata bits, and `mxRealloc` data
 preservation.

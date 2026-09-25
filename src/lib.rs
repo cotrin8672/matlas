@@ -19,8 +19,8 @@ mod ffi;
 mod runtime;
 
 pub use array::{
-    ArrayMut, ArrayRef, Class, Complex, Numeric, OwnedArray, PersistentArray, SparseIndices,
-    SparseNumeric, UninitNumeric,
+    ArrayMut, ArrayRef, Class, Complex, Numeric, OwnedArray, PersistentArray, PlainArrayRef,
+    SparseIndices, SparseNumeric, UninitNumeric,
 };
 pub use error::{Error, ErrorKind, MatError, Result};
 
@@ -184,6 +184,7 @@ impl<'mex> Matlab<'mex> {
         index: usize,
         name: &CStr,
     ) -> Result<OwnedArray<'mex>> {
+        runtime::require_unborrowed("get property")?;
         if index >= object.numel() {
             return Err(Error::bounds("get property", index, object.numel()));
         }
@@ -278,7 +279,7 @@ impl<'mex> Matlab<'mex> {
 
     /// Open a scope for borrowing multiple variables from one MATLAB workspace.
     /// The scope must be consumed to pass those pointers into a callback.
-    pub fn workspace_scope(&mut self, space: Workspace) -> WorkspaceScope<'_, 'mex> {
+    pub fn workspace_scope(&self, space: Workspace) -> WorkspaceScope<'_, 'mex> {
         WorkspaceScope {
             space,
             _context: self,
@@ -478,11 +479,11 @@ impl Workspace {
     }
 }
 
-/// An exclusive workspace access period. [`WorkspaceScope::call`] consumes it
+/// A workspace access period. [`WorkspaceScope::call`] consumes it
 /// and the supplied workspace values before invoking MATLAB.
 pub struct WorkspaceScope<'a, 'mex> {
     space: Workspace,
-    _context: &'a mut Matlab<'mex>,
+    _context: &'a Matlab<'mex>,
 }
 
 impl<'a, 'mex> WorkspaceScope<'a, 'mex> {
@@ -577,6 +578,15 @@ impl WorkspaceValue<'_> {
     /// Borrow the referenced MATLAB-owned array.
     pub fn as_ref(&self) -> ArrayRef<'_> {
         unsafe { ArrayRef::from_raw(self.raw) }
+    }
+
+    /// Validate that this workspace value can be serialized without a MATLAB callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a cell, struct, string, object, or other non-primitive array.
+    pub fn plain(&self) -> Result<PlainArrayRef<'_>> {
+        self.as_ref().try_into()
     }
 }
 
@@ -850,8 +860,9 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
     /// # Errors
     ///
     /// Returns an error for the wrong file mode, an empty name, or a native
-    /// write failure.
+    /// write failure, or if a workspace value is borrowed.
     pub fn put(&mut self, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
+        runtime::require_unborrowed("put MAT variable")?;
         self.require_write()?;
         validate_name(name)?;
         let mut code = 0;
@@ -875,8 +886,9 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
     /// # Errors
     ///
     /// Returns an error for the wrong file mode, an empty name, or a native
-    /// write failure.
+    /// write failure, or if a workspace value is borrowed.
     pub fn put_global(&mut self, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
+        runtime::require_unborrowed("put global MAT variable")?;
         self.require_write()?;
         validate_name(name)?;
         let mut code = 0;
@@ -895,13 +907,48 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
             ))
         }
     }
+
+    /// Write a primitive array without copying its workspace source first.
+    /// Only validated numeric, logical, and character arrays can use this path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong file mode, an empty name, or a native
+    /// write failure.
+    pub fn put_plain(&mut self, name: &CStr, value: PlainArrayRef<'_>) -> Result<()> {
+        self.require_write()?;
+        validate_name(name)?;
+        let mut code = 0;
+        let status = unsafe {
+            ffi::matrust_mat_put(
+                self.ptr(),
+                name.as_ptr(),
+                value.as_ref().as_ptr(),
+                0,
+                &mut code,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::native(
+                ErrorKind::Write,
+                "put plain MAT variable",
+                format!("{name:?}"),
+                status,
+                code,
+            ))
+        }
+    }
+
     /// Read a complete variable into an owned array.
     ///
     /// # Errors
     ///
     /// Returns an error for the wrong file mode, an empty name, a missing
-    /// variable, or a native read failure.
+    /// variable, a native read failure, or an active workspace borrow.
     pub fn get(&mut self, name: &CStr) -> Result<OwnedArray<'mex>> {
+        runtime::require_unborrowed("get MAT variable")?;
         self.require_read()?;
         validate_name(name)?;
         let mut code = 0;
@@ -1182,6 +1229,9 @@ impl<'mex, 'ctx> Iterator for Variables<'mex, 'ctx> {
         if self.done || self.remaining == 0 {
             self.done = true;
             return None;
+        }
+        if let Err(error) = runtime::require_unborrowed("next MAT variable") {
+            return Some(Err(error));
         }
         let mut name: *const c_char = std::ptr::null();
         let mut code = 0;

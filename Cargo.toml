@@ -1,6 +1,6 @@
 [package]
 name = "matlas"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Safe, idiomatic Rust bindings for MATLAB's Matrix, MEX, and MAT-file APIs"
 license = "MIT"

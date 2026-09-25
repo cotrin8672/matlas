@@ -9,7 +9,7 @@ different Rust types with different lifetimes and drop behavior.
 
 - MATLAB with `matrix.h`, `mex.h`, and `mat.h`
 - Rust and a native C compiler supported by MATLAB
-- MATLAB R2024a/API 800 is the v0.6 validation target
+- MATLAB R2024a/API 800 is the v0.7 validation target
 
 Set `MATLABROOT` to the MATLAB installation. The build script links the
 versioned API libraries and compiles the C shim automatically.
@@ -40,6 +40,11 @@ callback outputs, and `Error::with_id` sets a validated MATLAB exception ID.
 scope can fetch several `WorkspaceValue`s and pass them, with ordinary array
 views, to `WorkspaceScope::call`. The call consumes the scope and the passed
 values; it rejects any workspace values left live outside the call.
+`WorkspaceScope` can coexist with a `MatFile`; callback-capable operations
+return `Busy` while a workspace value is live. For a primitive workspace array,
+`WorkspaceValue::plain` validates its class and `MatFile::put_plain` writes it
+without first duplicating the source array. Cell, struct, string, and object
+arrays are excluded from this path.
 
 ```rust,no_run
 # use matlas::{ArrayRef, Matlab, Result, Workspace};
@@ -57,10 +62,21 @@ directory listing, and explicit close. `OwnedArray::persist` returns a
 generation-checked handle that can be kept between MEX invocations; accessing
 it again requires the new invocation's `Matlab` context.
 
+```rust,no_run
+# use matlas::{MatFile, Matlab, Result, Workspace};
+fn save_waveform(cx: &mut Matlab<'_>) -> Result<()> {
+    let mut file = MatFile::create(cx, "waveform.mat")?;
+    let ws = cx.workspace_scope(Workspace::Caller);
+    let value = ws.get(c"At")?;
+    file.put_plain(c"At", value.plain()?)?;
+    file.close()
+}
+```
+
 ## Status
 
 The old `rustmat` and `rustmex` APIs are intentionally not dependencies.
-Windows is the supported target; v0.6 was validated on R2024a. The
+Windows is the supported target; v0.7 was validated on R2024a. The
 R2025a/API-800 audit covers all 178 published C functions: safe operations
 use lifetime-aware types, aliases use a more general
 safe operation, and ownership-adopting or non-local-exit operations remain

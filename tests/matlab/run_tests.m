@@ -180,6 +180,21 @@ assert(matlas_integration(32, 3) == 5);
 object = MatlasTestObject;
 object.Value = 11;
 assert(matlas_integration(29, 3, object) == 22);
+fprintf('MATLAS_STAGE guarded_workspace_mat\n');
+object = MatlasCallbackObject;
+save('callback.mat', 'object');
+assignin('base', 'matlas_borrowed', 42);
+assignin('base', 'matlas_callback_ran', false);
+assert(matlas_integration(33, 3, object, {object}, struct('item', object), "text", ...
+    logical([1 0]), 'abc', sparse([1 0; 0 2])) == 0);
+assert(~evalin('base', 'matlas_callback_ran'));
+assert(evalin('base', 'matlas_borrowed') == 42);
+plain = load('guarded.mat');
+assert(plain.plain == 42);
+assert(isequal(plain.logical, logical([1 0])));
+assert(strcmp(plain.character, 'abc'));
+assert(isequal(plain.sparse, sparse([1 0; 0 2])));
+evalin('base', 'clear matlas_borrowed matlas_callback_ran');
 try
     matlas_integration(22, 3);
     error('matlas:test:noCallbackError', 'Expected a trapped call error');
@@ -195,7 +210,7 @@ catch e
     assert(contains(e.message, 'intentional eval failure'), e.message);
 end
 run_v06_tests;
-fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.6\n', checks);
+fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.7\n', checks);
 end
 
 function verifyFormat(path, version)

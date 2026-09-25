@@ -1,6 +1,6 @@
 use matlas::{
-    Complex, Error, ErrorKind, Inputs, MatFile, MatVersion, Matlab, OpenMode, Outputs, Result,
-    VariableInfos, Variables, Workspace,
+    Complex, Error, ErrorKind, Inputs, MatFile, MatVersion, Matlab, OpenMode, Outputs,
+    PlainArrayRef, Result, VariableInfos, Variables, Workspace,
 };
 use std::{cell::RefCell, ffi::CString};
 
@@ -416,6 +416,51 @@ fn run<'mex>(
             drop(unused);
             outputs.set(0, cx.scalar(scalar)?)?;
         }
+        33 => {
+            let object = inputs.get(2).unwrap();
+            let mut owned = cx.duplicate(object)?;
+            let mut file = MatFile::create_with_format(cx, "guarded.mat", MatVersion::V73)?;
+            let mut reader = MatFile::open(cx, "callback.mat", OpenMode::Read)?;
+            let mut values = Variables::open(cx, "callback.mat")?;
+            let ws = cx.workspace_scope(Workspace::Base);
+            let borrowed = ws.get(c"matlas_borrowed")?;
+
+            assert!(
+                matches!(cx.property(object, 0, c"Value"), Err(error) if error.kind == ErrorKind::Busy)
+            );
+            assert!(
+                matches!(owned.property(0, c"Value"), Err(error) if error.kind == ErrorKind::Busy)
+            );
+            assert!(
+                matches!(owned.as_mut().set_property(0, c"Value", borrowed.as_ref()), Err(error) if error.kind == ErrorKind::Busy)
+            );
+            assert!(
+                matches!(file.put(c"object", object), Err(error) if error.kind == ErrorKind::Busy)
+            );
+            assert!(
+                matches!(file.put_global(c"object", object), Err(error) if error.kind == ErrorKind::Busy)
+            );
+            assert!(matches!(reader.get(c"object"), Err(error) if error.kind == ErrorKind::Busy));
+            assert!(matches!(values.next(), Some(Err(error)) if error.kind == ErrorKind::Busy));
+            assert!(
+                matches!(PlainArrayRef::try_from(object), Err(error) if error.kind == ErrorKind::InvalidInput)
+            );
+            for index in 3..=5 {
+                assert!(
+                    matches!(PlainArrayRef::try_from(inputs.get(index).unwrap()), Err(error) if error.kind == ErrorKind::InvalidInput)
+                );
+            }
+
+            file.put_plain(c"plain", borrowed.plain()?)?;
+            file.put_plain(c"logical", inputs.get(6).unwrap().try_into()?)?;
+            file.put_plain(c"character", inputs.get(7).unwrap().try_into()?)?;
+            file.put_plain(c"sparse", inputs.get(8).unwrap().try_into()?)?;
+            drop(borrowed);
+            file.close()?;
+            reader.close()?;
+            values.close()?;
+            outputs.set(0, cx.scalar(0.0)?)?;
+        }
         _ => {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -427,7 +472,7 @@ fn run<'mex>(
     if !outputs.is_empty()
         && !matches!(
             command,
-            2 | 5 | 9 | 14 | 15 | 17 | 19 | 20 | 21 | 24 | 26 | 27 | 28 | 29 | 30 | 31 | 32
+            2 | 5 | 9 | 14 | 15 | 17 | 19 | 20 | 21 | 24 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33
         )
     {
         outputs.set(0, cx.scalar(0.0)?)?;
