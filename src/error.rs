@@ -41,6 +41,8 @@ pub enum ErrorKind {
 /// An error that preserves the native operation and MATLAB error status.
 #[derive(Debug)]
 pub struct Error {
+    /// Optional MATLAB exception identifier overriding the category default.
+    identifier: Option<String>,
     /// Stable high-level error category.
     pub kind: ErrorKind,
     /// Operation that detected the failure.
@@ -57,6 +59,7 @@ impl Error {
     /// Construct an error without a native status code.
     pub fn new(kind: ErrorKind, operation: &'static str, detail: impl Into<String>) -> Self {
         Self {
+            identifier: None,
             kind,
             operation,
             detail: detail.into(),
@@ -72,6 +75,7 @@ impl Error {
         code: i32,
     ) -> Self {
         Self {
+            identifier: None,
             kind,
             operation,
             detail: detail.into(),
@@ -114,9 +118,35 @@ impl Error {
         )
     }
 
-    /// Return the stable MATLAB exception identifier for this category.
-    pub fn id(&self) -> &'static str {
-        match self.kind {
+    /// Set a MATLAB exception identifier such as `store:MissingRecordFile`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if the identifier is invalid or exceeds the
+    /// native MEX entrypoint's 255-byte identifier buffer.
+    pub fn with_id(mut self, identifier: impl Into<String>) -> crate::Result<Self> {
+        let identifier = identifier.into();
+        if identifier.len() > 255
+            || identifier.split(':').count() < 2
+            || !identifier.split(':').all(|field| {
+                let mut bytes = field.bytes();
+                bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+                    && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            })
+        {
+            return Err(Self::new(
+                ErrorKind::InvalidInput,
+                "error identifier",
+                "expected colon-separated ASCII identifiers of at most 255 bytes",
+            ));
+        }
+        self.identifier = Some(identifier);
+        Ok(self)
+    }
+
+    /// Return the custom identifier, or the default for this category.
+    pub fn id(&self) -> &str {
+        self.identifier.as_deref().unwrap_or(match self.kind {
             ErrorKind::InvalidInput => "matlas:input:invalid",
             ErrorKind::Type => "matlas:array:type",
             ErrorKind::Bounds => "matlas:array:bounds",
@@ -130,7 +160,7 @@ impl Error {
             ErrorKind::Write => "matlas:file:write",
             ErrorKind::Close => "matlas:file:close",
             ErrorKind::Native => "matlas:native",
-        }
+        })
     }
 }
 
@@ -149,3 +179,25 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 /// Result type used by the safe API.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_identifier_is_validated() {
+        let error = Error::new(ErrorKind::Open, "open", "missing")
+            .with_id("store:MissingRecordFile")
+            .unwrap();
+        assert_eq!(error.id(), "store:MissingRecordFile");
+        assert_eq!(error.kind, ErrorKind::Open);
+        for id in ["one", "bad:", "0bad:Good", "good:bad-name", "good:日本語"] {
+            assert!(Error::new(ErrorKind::Open, "open", "missing")
+                .with_id(id)
+                .is_err());
+        }
+        assert!(Error::new(ErrorKind::Open, "open", "missing")
+            .with_id(format!("good:{}", "x".repeat(251)))
+            .is_err());
+    }
+}

@@ -194,7 +194,8 @@ catch e
     assert(strcmp(e.identifier, 'matlas:callback'), e.message);
     assert(contains(e.message, 'intentional eval failure'), e.message);
 end
-fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks\n', checks);
+run_v06_tests;
+fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.6\n', checks);
 end
 
 function verifyFormat(path, version)

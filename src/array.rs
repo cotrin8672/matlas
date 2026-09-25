@@ -505,9 +505,64 @@ impl<'a> ArrayRef<'a> {
     pub fn is_logical(self) -> bool {
         unsafe { ffi::matrust_array_is_logical(self.as_ptr()) != 0 }
     }
+    /// Test whether this is a 1-by-1 MATLAB logical value.
+    pub fn is_logical_scalar(self) -> bool {
+        unsafe { ffi::matrust_mx_is_logical_scalar(self.as_ptr()) != 0 }
+    }
     /// Test whether this is a character array.
     pub fn is_char(self) -> bool {
         unsafe { ffi::matrust_array_is_char(self.as_ptr()) != 0 }
+    }
+    /// Test whether this is a character row or a scalar MATLAB string.
+    pub fn is_text_scalar(self) -> bool {
+        (self.is_char()
+            && (self.dimensions() == [0, 0] || (self.dimensions().len() == 2 && self.rows() == 1)))
+            || (self.is_class(c"string") && self.numel() == 1)
+    }
+
+    /// Decode a character row or scalar MATLAB string into Rust text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for another type or shape, a missing string, an active
+    /// workspace borrow, a failed MATLAB conversion, or invalid UTF-16.
+    pub fn to_text(self, cx: &mut Matlab<'_>) -> Result<String> {
+        if !self.is_text_scalar() {
+            return Err(Error::type_mismatch(
+                "convert text",
+                "char row or scalar string",
+                self,
+            ));
+        }
+        if self.is_char() {
+            return self.string();
+        }
+        let [missing] = cx.call_array(c"ismissing", &[self])?;
+        if missing.as_ref().logical_scalar()? {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "convert text",
+                "missing MATLAB string",
+            ));
+        }
+        let [chars] = cx.call_array(c"char", &[self])?;
+        chars.as_ref().string()
+    }
+
+    /// Read a logical scalar as a Rust boolean.
+    ///
+    /// # Errors
+    ///
+    /// Returns a type error unless the array is a logical scalar.
+    pub fn logical_scalar(self) -> Result<bool> {
+        if !self.is_logical_scalar() {
+            return Err(Error::type_mismatch(
+                "logical scalar",
+                "logical scalar",
+                self,
+            ));
+        }
+        Ok(unsafe { ffi::matrust_mx_is_logical_scalar_true(self.as_ptr()) != 0 })
     }
     /// Test whether this is a structure array.
     pub fn is_struct(self) -> bool {
@@ -1308,6 +1363,17 @@ impl<'mex> Matlab<'mex> {
         let mut array = unsafe { OwnedArray::from_raw(raw) };
         array.as_mut().logicals_mut()?.copy_from_slice(values);
         Ok(array)
+    }
+
+    /// Create a 1-by-1 MATLAB logical value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an allocation error if MATLAB cannot create the array.
+    pub fn logical_scalar(&self, value: bool) -> Result<OwnedArray<'mex>> {
+        let raw = unsafe { ffi::matrust_mx_create_logical_scalar(i32::from(value)) };
+        let raw = NonNull::new(raw).ok_or_else(|| Error::allocation("create logical scalar"))?;
+        Ok(unsafe { OwnedArray::from_raw(raw) })
     }
 
     /// Create a UTF-16 character array from column-major code units.

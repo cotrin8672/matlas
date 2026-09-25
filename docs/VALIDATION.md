@@ -1,21 +1,23 @@
 # Validation
 
-Current local checks use MATLAB R2025a/API 800, MSVC, and Rust 1.95:
-The declared Rust 1.77 minimum was also checked by building both `matlas` and
-the `matlas-integration` MEX crate with `cargo +1.77.0 build --locked`.
+Current v0.6.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.94.1.
+The declared Rust 1.77 minimum was checked by building the full workspace
+with `cargo +1.77.0 build --workspace --locked`.
 
-The v0.5.0 workspace-scope callback cases passed the full MATLAB suite on
-R2024a on 2026-09-24. The v0.5.0 workspace also built with Rust 1.77.0.
+The v0.6.0 scalar text, logical scalar, fixed-arity MEX, callback-array, and
+custom error-ID cases passed on R2024a on 2026-09-25. The v0.6.0 workspace
+also built with Rust 1.77.0.
 
 ```powershell
-$env:MATLABROOT = 'C:\Program Files\MATLAB\R2025a'
+$env:MATLABROOT = 'C:\Program Files\MATLAB\R2024a'
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 $env:RUSTDOCFLAGS = '-D warnings'
 cargo doc --workspace --no-deps
 powershell -File scripts/audit_api.ps1
-cargo build -p matlas-integration
+cargo build --workspace
 Copy-Item target/debug/matlas_integration.dll target/debug/matlas_integration.mexw64 -Force
+Copy-Item target/debug/matlas_fixed_integration.dll target/debug/matlas_fixed_integration.mexw64 -Force
 & "$env:MATLABROOT\bin\matlab.exe" -batch "addpath('$((Resolve-Path tests/matlab).Path -replace '\\','/')'); run_tests('$((Resolve-Path .).Path -replace '\\','/')')"
 ```
 

@@ -327,6 +327,21 @@ impl<'mex> Matlab<'mex> {
         )
     }
 
+    /// Call MATLAB and return exactly `N` owned outputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Matlab::call`].
+    pub fn call_array<const N: usize>(
+        &mut self,
+        name: &CStr,
+        inputs: &[ArrayRef<'_>],
+    ) -> Result<[OwnedArray<'mex>; N]> {
+        self.call(name, inputs, N)?
+            .try_into()
+            .map_err(|_| Error::new(ErrorKind::Native, "call MATLAB", "unexpected output count"))
+    }
+
     /// Evaluate MATLAB source through the trapping API.
     ///
     /// # Errors
@@ -513,6 +528,21 @@ impl<'a, 'mex> WorkspaceScope<'a, 'mex> {
         runtime::require_unborrowed("call MATLAB")?;
         call_raw(name, raw, output_count)
     }
+
+    /// Call MATLAB with borrowed workspace inputs and return exactly `N` outputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`WorkspaceScope::call`].
+    pub fn call_array<const N: usize>(
+        self,
+        name: &CStr,
+        inputs: impl IntoIterator<Item = CallInput<'a>>,
+    ) -> Result<[OwnedArray<'mex>; N]> {
+        self.call(name, inputs, N)?
+            .try_into()
+            .map_err(|_| Error::new(ErrorKind::Native, "call MATLAB", "unexpected output count"))
+    }
 }
 
 /// A pointer returned by `mexGetVariablePtr`. It can be read until it is
@@ -581,10 +611,13 @@ impl CallInput<'_> {
 }
 
 /// Read-only MEX input arguments owned by MATLAB.
-pub struct Inputs<'mex> {
+///
+/// A fixed `N` is checked before the handler runs. The default const value
+/// reserves `usize::MAX` for handlers with a variable input count.
+pub struct Inputs<'mex, const N: usize = { usize::MAX }> {
     values: Vec<ArrayRef<'mex>>,
 }
-impl<'mex> Inputs<'mex> {
+impl<'mex, const N: usize> Inputs<'mex, N> {
     fn new(values: Vec<ArrayRef<'mex>>) -> Self {
         Self { values }
     }
@@ -604,13 +637,40 @@ impl<'mex> Inputs<'mex> {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = ArrayRef<'mex>> + '_ {
         self.values.iter().copied()
     }
+
+    /// Require exactly `N` input arguments and return them in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if the argument count differs from `N`.
+    pub fn require<const M: usize>(&self) -> Result<[ArrayRef<'mex>; M]> {
+        if self.len() != M {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "MEX inputs",
+                format!("expected {M} inputs, got {}", self.len()),
+            ));
+        }
+        Ok(std::array::from_fn(|index| self.values[index]))
+    }
+
+    /// Consume fixed-arity inputs as an array for destructuring.
+    ///
+    /// The entrypoint checks the actual MATLAB argument count before calling
+    /// a handler with fixed arity.
+    pub fn into_array(self) -> [ArrayRef<'mex>; N] {
+        std::array::from_fn(|index| self.values[index])
+    }
 }
 
 /// MEX output slots that accept ownership of Rust-created arrays.
-pub struct Outputs<'mex> {
+///
+/// A fixed `N` is checked before the handler runs. The default const value
+/// reserves `usize::MAX` for handlers with a variable output count.
+pub struct Outputs<'mex, const N: usize = { usize::MAX }> {
     values: Vec<Option<OwnedArray<'mex>>>,
 }
-impl<'mex> Outputs<'mex> {
+impl<'mex, const N: usize> Outputs<'mex, N> {
     fn new(count: usize) -> Self {
         Self {
             values: (0..count).map(|_| None).collect(),
@@ -623,6 +683,21 @@ impl<'mex> Outputs<'mex> {
     /// Test whether MATLAB requested no outputs.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
+    }
+    /// Require exactly `count` requested output slots.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if MATLAB requested a different count.
+    pub fn require_len(&self, count: usize) -> Result<()> {
+        if self.len() != count {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "MEX outputs",
+                format!("expected {count} outputs, got {}", self.len()),
+            ));
+        }
+        Ok(())
     }
     /// Transfer an owned array into an output slot.
     ///

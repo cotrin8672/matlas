@@ -15,8 +15,12 @@ pub type Handler = for<'mex> fn(&mut Matlab<'mex>, Inputs<'mex>, &mut Outputs<'m
 
 /// Called only by `mex_entry.c` with MATLAB-owned input/output pointers.
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn dispatch(
-    handler: Handler,
+pub unsafe fn dispatch<const INPUTS: usize, const OUTPUTS: usize>(
+    handler: for<'mex> fn(
+        &mut Matlab<'mex>,
+        Inputs<'mex, INPUTS>,
+        &mut Outputs<'mex, OUTPUTS>,
+    ) -> Result<()>,
     nlhs: i32,
     plhs: *mut *mut crate::ffi::RawArray,
     nrhs: i32,
@@ -52,6 +56,20 @@ pub unsafe fn dispatch(
         })?;
         for index in 0..nlhs {
             unsafe { plhs.add(index).write(std::ptr::null_mut()) };
+        }
+        if INPUTS != usize::MAX && nrhs != INPUTS {
+            return Err(Error::new(
+                crate::ErrorKind::InvalidInput,
+                "MEX inputs",
+                format!("expected {INPUTS} inputs, got {nrhs}"),
+            ));
+        }
+        if OUTPUTS != usize::MAX && nlhs != OUTPUTS {
+            return Err(Error::new(
+                crate::ErrorKind::InvalidInput,
+                "MEX outputs",
+                format!("expected {OUTPUTS} outputs, got {nlhs}"),
+            ));
         }
         let _invocation = runtime::begin_invocation()?;
         let mut context = Matlab::new();

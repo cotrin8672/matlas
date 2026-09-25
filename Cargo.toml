@@ -1,6 +1,6 @@
 [package]
 name = "matlas"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Safe, idiomatic Rust bindings for MATLAB's Matrix, MEX, and MAT-file APIs"
 license = "MIT"
@@ -19,7 +19,7 @@ exclude = ["/.github", "/docs/RELEASING.md", "/tests"]
 cc = "1"
 
 [workspace]
-members = ["tests/mex"]
+members = ["tests/mex", "tests/mex_fixed"]
 default-members = ["."]
 resolver = "2"
 

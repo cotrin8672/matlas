@@ -390,20 +390,14 @@ fn run<'mex>(
             let ws = cx.workspace_scope(Workspace::Caller);
             let left = ws.get(c"from_caller_scalar")?;
             let right = ws.get(c"second_caller_scalar")?;
-            let value = ws
-                .call(c"plus", [left.into(), right.into()], 1)?
-                .pop()
-                .unwrap();
+            let [value] = ws.call_array(c"plus", [left.into(), right.into()])?;
             outputs.set(0, value)?;
         }
         31 => {
             let input = inputs.get(2).unwrap();
             let ws = cx.workspace_scope(Workspace::Caller);
             let value = ws.get(c"from_caller_scalar")?;
-            let value = ws
-                .call(c"plus", [input.into(), value.into()], 1)?
-                .pop()
-                .unwrap();
+            let [value] = ws.call_array(c"plus", [input.into(), value.into()])?;
             outputs.set(0, value)?;
         }
         32 => {

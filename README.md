@@ -9,7 +9,7 @@ different Rust types with different lifetimes and drop behavior.
 
 - MATLAB with `matrix.h`, `mex.h`, and `mat.h`
 - Rust and a native C compiler supported by MATLAB
-- MATLAB R2025a/API 800 is the current validation target
+- MATLAB R2024a/API 800 is the v0.6 validation target
 
 Set `MATLABROOT` to the MATLAB installation. The build script links the
 versioned API libraries and compiles the C shim automatically.
@@ -21,13 +21,18 @@ use matlas::{Inputs, Matlab, Outputs, Result};
 
 matlas::mex_entrypoint!(run);
 
-fn run<'mex>(cx: &mut Matlab<'mex>, inputs: Inputs<'mex>, out: &mut Outputs<'mex>) -> Result<()> {
-    let value = inputs.get(0).ok_or_else(|| matlas::Error::new(
-        matlas::ErrorKind::InvalidInput, "example", "one input required"))?;
+fn run<'mex>(cx: &mut Matlab<'mex>, inputs: Inputs<'mex, 1>, out: &mut Outputs<'mex, 1>) -> Result<()> {
+    let [value] = inputs.into_array();
     out.set(0, cx.duplicate(value)?)?;
     Ok(())
 }
 ```
+
+Fixed input and output counts are checked before the handler runs. Omitting
+the const parameters keeps the existing variable-count API. `ArrayRef::to_text`
+reads a character row or scalar MATLAB string; `logical_scalar` reads and
+creates MATLAB logical scalars. `call_array::<N>` returns a fixed number of
+callback outputs, and `Error::with_id` sets a validated MATLAB exception ID.
 
 `OwnedArray` is the unique Rust owner and destroys its `mxArray` on drop.
 `ArrayRef` is read-only and cannot be destroyed or transferred. A
@@ -55,8 +60,9 @@ it again requires the new invocation's `Matlab` context.
 ## Status
 
 The old `rustmat` and `rustmex` APIs are intentionally not dependencies.
-Windows/R2025a is the first supported target. The R2025a/API-800 audit covers all 178 published C
-functions: safe operations use lifetime-aware types, aliases use a more general
+Windows is the supported target; v0.6 was validated on R2024a. The
+R2025a/API-800 audit covers all 178 published C functions: safe operations
+use lifetime-aware types, aliases use a more general
 safe operation, and ownership-adopting or non-local-exit operations remain
 explicitly unsafe in `matlas::raw`. See [API_COVERAGE.md](docs/API_COVERAGE.md)
 for the function-by-function inventory, [DESIGN.md](docs/DESIGN.md) for the
