@@ -97,9 +97,20 @@ impl MxBuffer<'_> {
     /// Returns an allocation error if MATLAB cannot resize the buffer. The
     /// original allocation remains owned by this value on failure.
     pub fn resize(&mut self, len: usize) -> Result<()> {
+        if len > isize::MAX as usize {
+            return Err(Error::new(
+                ErrorKind::Bounds,
+                "resize MATLAB buffer",
+                "buffer is too large for a Rust slice",
+            ));
+        }
         let raw = unsafe { ffi::matrust_realloc(self.raw.as_ptr().cast(), len.max(1)) };
-        self.raw = NonNull::new(raw.cast())
+        let raw: NonNull<u8> = NonNull::new(raw.cast())
             .ok_or_else(|| Error::allocation("reallocate MATLAB buffer"))?;
+        if len > self.len {
+            unsafe { raw.as_ptr().add(self.len).write_bytes(0, len - self.len) };
+        }
+        self.raw = raw;
         self.len = len;
         Ok(())
     }
@@ -232,6 +243,13 @@ impl<'mex> Matlab<'mex> {
     ///
     /// Returns an allocation error if MATLAB returns a null pointer.
     pub fn calloc(&self, len: usize) -> Result<MxBuffer<'mex>> {
+        if len > isize::MAX as usize {
+            return Err(Error::new(
+                ErrorKind::Bounds,
+                "allocate MATLAB buffer",
+                "buffer is too large for a Rust slice",
+            ));
+        }
         let bytes = if len == 0 { 1 } else { len };
         let raw = unsafe { ffi::matrust_calloc(1, bytes) };
         let raw =
@@ -404,7 +422,7 @@ fn call_raw<'mex>(
     if let Some(trap) = NonNull::new(trap) {
         for raw in outputs {
             if !raw.is_null() {
-                unsafe { ffi::matrust_array_destroy(raw) }
+                unsafe { runtime::destroy_or_defer(NonNull::new_unchecked(raw)) }
             }
         }
         return Err(callback_error(
@@ -416,7 +434,7 @@ fn call_raw<'mex>(
     if outputs.iter().any(|raw| raw.is_null()) {
         for raw in outputs {
             if !raw.is_null() {
-                unsafe { ffi::matrust_array_destroy(raw) }
+                unsafe { runtime::destroy_or_defer(NonNull::new_unchecked(raw)) }
             }
         }
         return Err(Error::new(
@@ -523,6 +541,7 @@ impl<'a, 'mex> WorkspaceScope<'a, 'mex> {
         inputs: impl IntoIterator<Item = CallInput<'a>>,
         output_count: usize,
     ) -> Result<Vec<OwnedArray<'mex>>> {
+        let _handoff = runtime::begin_callback_handoff();
         let inputs: Vec<_> = inputs.into_iter().collect();
         let raw = inputs.iter().map(CallInput::as_ptr).collect();
         drop(inputs);
@@ -1087,7 +1106,11 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
         if status == 0 {
             Ok(())
         } else {
-            Err(Error::native_status("close MAT-file", status))
+            Err(Error::native_status_kind(
+                ErrorKind::Close,
+                "close MAT-file",
+                status,
+            ))
         }
     }
 }
@@ -1185,7 +1208,7 @@ impl ArrayInfo<'_> {
 }
 impl Drop for ArrayInfo<'_> {
     fn drop(&mut self) {
-        unsafe { ffi::matrust_array_destroy(self.raw.as_ptr()) }
+        unsafe { runtime::destroy_or_defer(self.raw) }
     }
 }
 
@@ -1256,7 +1279,7 @@ impl<'mex, 'ctx> Iterator for Variables<'mex, 'ctx> {
         };
         if name.is_null() {
             self.done = true;
-            unsafe { ffi::matrust_array_destroy(raw.as_ptr()) };
+            unsafe { runtime::destroy_or_defer(raw) };
             return Some(Err(Error::new(
                 ErrorKind::Native,
                 "next MAT variable",
@@ -1327,7 +1350,7 @@ impl<'mex, 'ctx> Iterator for VariableInfos<'mex, 'ctx> {
         };
         if name.is_null() {
             self.done = true;
-            unsafe { ffi::matrust_array_destroy(raw.as_ptr()) };
+            unsafe { runtime::destroy_or_defer(raw) };
             return Some(Err(Error::new(
                 ErrorKind::Native,
                 "next MAT header",

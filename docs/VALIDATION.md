@@ -1,10 +1,10 @@
 # Validation
 
-Current v0.8.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.97.1.
+Current v0.9.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.97.1.
 The declared Rust 1.77 minimum was checked by building the full workspace
 with `cargo +1.77.0 build --workspace --locked`.
 
-The v0.8.0 checks passed on 2026-09-27. Rust tests cover dynamic ID validation
+The v0.9.0 checks passed on 2026-09-27. Rust tests cover dynamic ID validation
 through the 255-byte limit, compile-time rejection of invalid literal IDs,
 preservation of native error fields, context order, and lazy context generation.
 The MATLAB suite checks 28 plain/non-plain values through both `ArrayRef` and
@@ -20,12 +20,13 @@ custom error-ID cases also passed.
 
 ```powershell
 $env:MATLABROOT = 'C:\Program Files\MATLAB\R2024a'
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+$env:PATH = "$env:MATLABROOT\bin\win64;$env:PATH"
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 $env:RUSTDOCFLAGS = '-D warnings'
-cargo doc --workspace --no-deps
+cargo doc --workspace --no-deps --locked
 powershell -File scripts/audit_api.ps1
-cargo build --workspace
+cargo build --workspace --locked
 Copy-Item target/debug/matlas_integration.dll target/debug/matlas_integration.mexw64 -Force
 Copy-Item target/debug/matlas_fixed_integration.dll target/debug/matlas_fixed_integration.mexw64 -Force
 & "$env:MATLABROOT\bin\matlab.exe" -batch "addpath('$((Resolve-Path tests/matlab).Path -replace '\\','/')'); run_tests('$((Resolve-Path .).Path -replace '\\','/')')"
@@ -45,4 +46,10 @@ workspace borrows/copies, guarded object property access and MAT-file operations
 primitive zero-copy MAT-file writes, structure field ownership,
 reshape and real/complex conversion, metadata bits, and `mxRealloc` data
 preservation. The v0.8 cases add plain classification and contextual error
-propagation without changing the native API surface.
+propagation without changing the native API surface. The v0.9 cases verify
+zero-filled `MxBuffer` growth and re-growth, strict typed scalar reads
+including `u64` and complex values, numeric shape validation before native
+allocation, character-row decoding, setter behavior without a preceding
+getter, workspace callback handoff, and exactly-once deferred destruction of
+owned and persistent arrays. Native non-local termination remains the C MEX
+ABI limitation described in [ERROR_HANDLING.md](ERROR_HANDLING.md).

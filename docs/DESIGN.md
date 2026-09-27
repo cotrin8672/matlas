@@ -5,7 +5,8 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
 
 ## Ownership categories
 
-- `OwnedArray<'mex>` is the sole owner and calls `mxDestroyArray` on drop.
+- `OwnedArray<'mex>` is the sole owner. Dropping it retires its `mxArray` for
+  destruction at a safe runtime boundary.
 - `ArrayRef<'a>` is a read-only borrow from an input, owned array, cell, or
   struct. It has no destructor and cannot be transferred to MATLAB.
 - `ArrayMut<'a, 'mex>` is an exclusive borrow of an owned array. Replacing a
@@ -17,7 +18,9 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
   value is live. Its consuming `call` accepts workspace values and ordinary
   `ArrayRef` inputs in argument order. Workspace values are released immediately before
   `mexCallMATLABWithTrap`; a live value omitted from the call is rejected by
-  the runtime guard. After the callback, old workspace pointers cannot be read.
+  the runtime guard. A handoff guard prevents retired arrays from being
+  destroyed between releasing the workspace guards and passing the pointers
+  to MATLAB. After the callback, old workspace pointers cannot be read.
 - `PlainArrayRef<'a>` validates the native class ID before `MatFile::put_plain`
   writes a borrowed array. Only numeric, logical, and character classes are
   accepted, including numeric/logical sparse arrays. Cell, struct, string, and
@@ -27,7 +30,8 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
 - `PersistentArray` owns a generation-checked persistent slot and may be stored
   between MEX invocations. Reading, mutating, or explicitly removing it
   requires the current invocation's `Matlab<'mex>` context. Dropping it
-  releases the MATLAB array; the MEX exit hook is a final cleanup path.
+  retires the MATLAB array even if a workspace value is borrowed; the MEX exit
+  hook is a final cleanup path.
 - `ArrayInfo<'mex>` owns metadata returned by `matGetVariableInfo` but exposes
   no public conversion to `ArrayRef`, because MATLAB fills its data pointers
   with non-dereferenceable sentinels.
@@ -36,6 +40,9 @@ The `Matlab<'mex>` brand is invariant and thread-bound. MEX entrypoints create
 it internally; `Matlab::attach` is unsafe for standalone/manual integration.
 `Matlab::lock` returns a thread-bound `ModuleLock` guard whose destructor
 balances exactly one `mexLock`; raw manual unlock remains outside the safe API.
+Retired arrays are destroyed only when no workspace borrow or callback handoff
+is active. Dropping a workspace borrow never destroys arrays. The runtime
+releases its internal borrow before calling `mxDestroyArray`.
 
 ## Workspace-borrow callback audit
 

@@ -1,6 +1,6 @@
 [package]
 name = "matlas"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 description = "Safe, idiomatic Rust bindings for MATLAB's Matrix, MEX, and MAT-file APIs"
 license = "MIT"
@@ -14,6 +14,7 @@ rust-version = "1.77"
 exclude = ["/.github", "/docs/RELEASING.md", "/tests"]
 
 [dependencies]
+num-complex = "0.4"
 
 [build-dependencies]
 cc = "1"

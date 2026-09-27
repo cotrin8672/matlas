@@ -229,7 +229,28 @@ catch e
 end
 assert(isequal(matlas_fixed_integration("after context error"), 'after context error'));
 fprintf('MATLAS_V08_PASS %d plain classifications; typed ID; nested context; original callback cause\n', numel(plainCandidates));
-fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.8\n', checks);
+fprintf('MATLAS_STAGE v09_scalar_property_destroy\n');
+assert(matlas_integration(36, 3) == 0);
+assignin('base', 'matlas_getter_ran', false);
+assignin('base', 'matlas_setter_ran', false);
+assert(matlas_integration(37, 3, MatlasPropertyProbe) == 0);
+assert(~evalin('base', 'matlas_getter_ran'));
+assert(evalin('base', 'matlas_setter_ran'));
+evalin('base', 'clear matlas_getter_ran matlas_setter_ran');
+for command = 38:40
+    assignin('base', 'matlas_drop_count', 0);
+    assignin('base', 'matlas_handoff_input', 42);
+    if command == 38
+        assert(matlas_integration(command, 3) == 43);
+    else
+        assert(matlas_integration(command, 3) == 0);
+    end
+    assert(evalin('base', 'matlas_drop_count') == 1);
+    assert(evalin('base', 'matlas_handoff_input') == -1);
+end
+evalin('base', 'clear matlas_drop_count matlas_handoff_input');
+fprintf('MATLAS_V09_PASS strict scalar; property setter; deferred destruction\n');
+fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.9\n', checks);
 end
 
 function verifyFormat(path, version)

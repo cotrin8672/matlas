@@ -23,8 +23,8 @@ fn run<'mex>(
             "command and format required",
         ));
     }
-    let command = inputs.get(0).unwrap().scalar()? as u32;
-    let format = match inputs.get(1).unwrap().scalar()? as u32 {
+    let command = inputs.get(0).unwrap().as_scalar::<f64>()? as u32;
+    let format = match inputs.get(1).unwrap().as_scalar::<f64>()? as u32 {
         0 => MatVersion::Default,
         1 => MatVersion::V4,
         2 => MatVersion::V6,
@@ -154,7 +154,7 @@ fn run<'mex>(
         }
         14 => {
             let numeric = cx.numeric::<f64>(&[2, 2], &[1.0, 2.0, 3.0, 4.0])?;
-            let text = cx.string("日本語")?;
+            let text = cx.char_row("日本語")?;
             let logical = cx.logical(&[2, 2], &[true, false, false, true])?;
             let mut cell = cx.cell(&[1, 1])?;
             cell.as_mut().replace_cell(0, Some(cx.scalar(42.0)?))?;
@@ -195,18 +195,9 @@ fn run<'mex>(
                 2,
                 &[0, 1, 2],
                 &[0, 1],
-                &[
-                    Complex {
-                        real: 1.0,
-                        imag: 2.0,
-                    },
-                    Complex {
-                        real: 3.0,
-                        imag: 4.0,
-                    },
-                ],
+                &[Complex { re: 1.0, im: 2.0 }, Complex { re: 3.0, im: 4.0 }],
             )?;
-            complex.as_mut().sparse_data_mut::<Complex<f64>>()?[1].real = 7.0;
+            complex.as_mut().sparse_data_mut::<Complex<f64>>()?[1].re = 7.0;
             outputs.set(0, logical)?;
             outputs.set(1, numeric)?;
             outputs.set(2, cx.scalar(input.linear_index(&[1, 1])? as f64)?)?;
@@ -223,7 +214,7 @@ fn run<'mex>(
                     "one scalar input required",
                 )
             })?;
-            let persistent = cx.scalar(value.scalar()?)?.persist()?;
+            let persistent = cx.scalar(value.as_scalar::<f64>()?)?.persist()?;
             PERSISTENT.with(|slot| *slot.borrow_mut() = Some(persistent));
         }
         17 => {
@@ -280,7 +271,7 @@ fn run<'mex>(
             outputs.set(0, value)?;
         }
         22 => {
-            let message = cx.string("intentional callback failure")?;
+            let message = cx.char_row("intentional callback failure")?;
             cx.call(c"error", &[message.as_ref()], 0)?;
         }
         23 => {
@@ -308,7 +299,7 @@ fn run<'mex>(
             let extra = value.as_mut().add_field(c"extra")?;
             value
                 .as_mut()
-                .replace_field_by_number(0, extra, Some(cx.string("ok")?))?;
+                .replace_field_by_number(0, extra, Some(cx.char_row("ok")?))?;
             value.as_mut().remove_field(1)?;
             outputs.set(0, empty)?;
             outputs.set(1, value)?;
@@ -326,12 +317,7 @@ fn run<'mex>(
                 ));
             }
             value.make_complex()?;
-            if value.as_ref().data::<Complex<f64>>()?[2]
-                != (Complex {
-                    real: 3.0,
-                    imag: 0.0,
-                })
-            {
+            if value.as_ref().data::<Complex<f64>>()?[2] != (Complex { re: 3.0, im: 0.0 }) {
                 return Err(Error::new(
                     ErrorKind::Native,
                     "make complex",
@@ -342,20 +328,35 @@ fn run<'mex>(
             let mut buffer = cx.calloc(4)?;
             buffer.as_bytes_mut().copy_from_slice(&[1, 2, 3, 4]);
             buffer.resize(8)?;
-            if buffer.as_bytes()[..4] != [1, 2, 3, 4] {
+            if buffer.as_bytes() != [1, 2, 3, 4, 0, 0, 0, 0] {
                 return Err(Error::new(
                     ErrorKind::Native,
                     "MATLAB buffer",
-                    "reallocation lost data",
+                    "reallocation lost data or exposed uninitialized bytes",
                 ));
             }
+            buffer.as_bytes_mut()[4..].copy_from_slice(&[5, 6, 7, 8]);
+            buffer.resize(3)?;
+            buffer.resize(7)?;
+            assert_eq!(buffer.as_bytes(), &[1, 2, 3, 0, 0, 0, 0]);
+            buffer.resize(0)?;
+            buffer.resize(5)?;
+            assert_eq!(buffer.as_bytes(), &[0; 5]);
+            assert!(matches!(
+                buffer.resize(isize::MAX as usize + 1),
+                Err(error) if error.kind == ErrorKind::Bounds
+            ));
+            assert!(matches!(
+                cx.calloc(isize::MAX as usize + 1),
+                Err(error) if error.kind == ErrorKind::Bounds
+            ));
             outputs.set(0, value)?;
         }
         28 => {
             let scalar = {
                 let ws = cx.workspace_scope(Workspace::Caller);
                 let value = ws.get(c"from_caller_scalar")?;
-                value.as_ref().scalar()?
+                value.as_ref().as_scalar::<f64>()?
             };
             let value = cx.scalar(scalar + 1.0)?;
             cx.workspace_put(Workspace::Caller, c"from_rust", value.as_ref())?;
@@ -365,7 +366,12 @@ fn run<'mex>(
             let input = inputs.get(2).ok_or_else(|| {
                 Error::new(ErrorKind::InvalidInput, "object", "object input required")
             })?;
-            if cx.property(input, 0, c"Value")?.as_ref().scalar()? != 11.0 {
+            if cx
+                .property(input, 0, c"Value")?
+                .as_ref()
+                .as_scalar::<f64>()?
+                != 11.0
+            {
                 return Err(Error::new(
                     ErrorKind::Native,
                     "get borrowed property",
@@ -373,7 +379,7 @@ fn run<'mex>(
                 ));
             }
             let mut object = cx.duplicate(input)?;
-            if object.property(0, c"Value")?.as_ref().scalar()? != 11.0 {
+            if object.property(0, c"Value")?.as_ref().as_scalar::<f64>()? != 11.0 {
                 return Err(Error::new(
                     ErrorKind::Native,
                     "get property",
@@ -412,7 +418,7 @@ fn run<'mex>(
                     "unused value was not rejected",
                 ));
             }
-            let scalar = unused.as_ref().scalar()?;
+            let scalar = unused.as_ref().as_scalar::<f64>()?;
             drop(unused);
             outputs.set(0, cx.scalar(scalar)?)?;
         }
@@ -471,14 +477,65 @@ fn run<'mex>(
             assert_eq!(PlainArrayRef::try_from(value.as_ref()).is_ok(), expected);
         }
         35 => {
-            let identifier = cx.string("matlasTest:OriginalCause")?;
-            let message = cx.string("original callback failure")?;
+            let identifier = cx.char_row("matlasTest:OriginalCause")?;
+            let message = cx.char_row("original callback failure")?;
             return cx
                 .call(c"error", &[identifier.as_ref(), message.as_ref()], 0)
                 .map(|_| ())
                 .with_id(matlas::error_id!("matlasTest:Context"))
                 .context("inner context")
                 .with_context(|| String::from("outer context"));
+        }
+        36 => {
+            let chars = cx.char_row("A\0日本語")?;
+            assert_eq!(chars.as_ref().decode_chars()?, "A\0日本語");
+            let integer = cx.scalar(u64::MAX)?;
+            assert_eq!(integer.as_ref().as_scalar::<u64>()?, u64::MAX);
+            assert!(integer.as_ref().as_scalar::<f64>().is_err());
+            let complex = cx.scalar(Complex::new(3.0, 4.0))?;
+            assert_eq!(
+                complex.as_ref().as_scalar::<Complex<f64>>()?,
+                Complex::new(3.0, 4.0)
+            );
+            assert!(complex.as_ref().as_scalar::<f64>().is_err());
+            let vector = cx.numeric(&[1, 2], &[1.0, 2.0])?;
+            assert!(vector.as_ref().as_scalar::<f64>().is_err());
+            assert!(matches!(
+                cx.numeric::<f64>(&[1_000_000, 1_000_000], &[]),
+                Err(error) if error.kind == ErrorKind::InvalidInput
+            ));
+        }
+        37 => {
+            let input = inputs.get(2).unwrap();
+            let mut object = cx.duplicate(input)?;
+            let replacement = cx.scalar(22.0)?;
+            object
+                .as_mut()
+                .set_property(0, c"Value", replacement.as_ref())?;
+        }
+        38 => {
+            let [mutator] = cx.call_array(c"MatlasDropMutator", &[])?;
+            let one = cx.scalar(1.0)?;
+            let ws = cx.workspace_scope(Workspace::Base);
+            let value = ws.get(c"matlas_handoff_input")?;
+            drop(mutator);
+            let [result] = ws.call_array(c"plus", [value.into(), one.as_ref().into()])?;
+            outputs.set(0, result)?;
+        }
+        39 => {
+            let [mutator] = cx.call_array(c"MatlasDropMutator", &[])?;
+            let persistent = mutator.persist()?;
+            let ws = cx.workspace_scope(Workspace::Base);
+            let borrowed = ws.get(c"matlas_handoff_input")?;
+            drop(persistent);
+            drop(borrowed);
+        }
+        40 => {
+            let [mutator] = cx.call_array(c"MatlasDropMutator", &[])?;
+            let ws = cx.workspace_scope(Workspace::Base);
+            let borrowed = ws.get(c"matlas_handoff_input")?;
+            assert!(matches!(mutator.persist(), Err(error) if error.kind == ErrorKind::Busy));
+            drop(borrowed);
         }
         _ => {
             return Err(Error::new(
@@ -491,7 +548,24 @@ fn run<'mex>(
     if !outputs.is_empty()
         && !matches!(
             command,
-            2 | 5 | 9 | 14 | 15 | 17 | 19 | 20 | 21 | 24 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33
+            2 | 5
+                | 9
+                | 14
+                | 15
+                | 17
+                | 19
+                | 20
+                | 21
+                | 24
+                | 26
+                | 27
+                | 28
+                | 29
+                | 30
+                | 31
+                | 32
+                | 33
+                | 38
         )
     {
         outputs.set(0, cx.scalar(0.0)?)?;

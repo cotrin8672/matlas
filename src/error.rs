@@ -183,7 +183,15 @@ impl Error {
     }
 
     pub(crate) fn native_status(operation: &'static str, status: i32) -> Self {
-        let mut error = Self::new(ErrorKind::Native, operation, "native operation failed");
+        Self::native_status_kind(ErrorKind::Native, operation, status)
+    }
+
+    pub(crate) fn native_status_kind(
+        kind: ErrorKind,
+        operation: &'static str,
+        status: i32,
+    ) -> Self {
+        let mut error = Self::new(kind, operation, "native operation failed");
         error.status = Some(status);
         error
     }

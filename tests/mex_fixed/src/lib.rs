@@ -12,7 +12,7 @@ fn run<'mex>(
         let text = value.to_text(cx)?;
         let [] = cx.call_array::<0>(c"drawnow", &[])?;
         let [_rows, _columns] = cx.call_array::<2>(c"size", &[value])?;
-        outputs.set(0, cx.string(&text)?)?;
+        outputs.set(0, cx.char_row(&text)?)?;
     } else if value.is_logical_scalar() {
         outputs.set(0, cx.logical_scalar(value.logical_scalar()?)?)?;
     } else if value.is_numeric() {

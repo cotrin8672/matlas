@@ -7,6 +7,9 @@ use std::{
     rc::Rc,
 };
 
+/// Interleaved complex values shared with Rust numerical crates.
+pub use num_complex::Complex;
+
 /// MATLAB's stable matrix class identifiers.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(i32)]
@@ -77,16 +80,6 @@ impl Class {
             _ => return None,
         })
     }
-}
-
-/// API-800 interleaved complex element layout.
-#[derive(Debug, Copy, Clone, Default, PartialEq)]
-#[repr(C)]
-pub struct Complex<T> {
-    /// Real component.
-    pub real: T,
-    /// Imaginary component.
-    pub imag: T,
 }
 
 mod sealed {
@@ -264,19 +257,14 @@ impl<'mex> OwnedArray<'mex> {
     /// Returns an error if a workspace borrow is active or the MEX cleanup
     /// callback cannot be registered.
     pub fn persist(self) -> Result<PersistentArray> {
-        let raw = self.into_non_null();
-        match crate::runtime::persist(raw) {
-            Ok((slot, generation)) => Ok(PersistentArray {
-                slot,
-                generation,
-                active: true,
-                _thread: PhantomData,
-            }),
-            Err(error) => {
-                unsafe { ffi::matrust_array_destroy(raw.as_ptr()) };
-                Err(error)
-            }
-        }
+        let (slot, generation) = crate::runtime::persist(self.raw)?;
+        let _ = self.into_non_null();
+        Ok(PersistentArray {
+            slot,
+            generation,
+            active: true,
+            _thread: PhantomData,
+        })
     }
 
     /// Change the dimensions while preserving the element count.
@@ -404,7 +392,8 @@ impl PersistentArray {
     ///
     /// # Errors
     ///
-    /// Returns an error if the handle is stale or a workspace borrow is active.
+    /// Returns an error if the handle is stale. Destruction is deferred while a
+    /// workspace value is borrowed.
     pub fn remove<'mex>(mut self, _context: &mut Matlab<'mex>) -> Result<()> {
         crate::runtime::remove_persistent(self.slot, self.generation)?;
         self.active = false;
@@ -589,7 +578,7 @@ impl<'a> ArrayRef<'a> {
             ));
         }
         if self.is_char() {
-            return self.string();
+            return self.decode_chars();
         }
         let [missing] = cx.call_array(c"ismissing", &[self])?;
         if missing.as_ref().logical_scalar()? {
@@ -600,7 +589,7 @@ impl<'a> ArrayRef<'a> {
             ));
         }
         let [chars] = cx.call_array(c"char", &[self])?;
-        chars.as_ref().string()
+        chars.as_ref().decode_chars()
     }
 
     /// Read a logical scalar as a Rust boolean.
@@ -666,20 +655,21 @@ impl<'a> ArrayRef<'a> {
         unsafe { ffi::matrust_array_user_bits(self.as_ptr()) }
     }
 
-    /// Convert the first dense numeric element to `f64` using MATLAB semantics.
+    /// Read one dense numeric element without converting its type.
     ///
     /// # Errors
     ///
-    /// Returns an error unless the array is nonempty, dense, and numeric.
-    pub fn scalar(self) -> Result<f64> {
-        if !self.is_numeric() || self.is_sparse() || self.is_empty() {
-            return Err(Error::type_mismatch(
-                "scalar",
-                "nonempty dense numeric",
-                self,
+    /// Returns an error unless the array has exactly one element and its class
+    /// and complexity match `T`.
+    pub fn as_scalar<T: Numeric>(self) -> Result<T> {
+        if self.numel() != 1 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "read scalar",
+                "expected exactly one element",
             ));
         }
-        Ok(unsafe { ffi::matrust_array_scalar(self.as_ptr()) })
+        Ok(self.data::<T>()?[0])
     }
 
     /// Borrow dense numeric data after checking class, complexity, and layout.
@@ -738,12 +728,12 @@ impl<'a> ArrayRef<'a> {
         checked_slice(raw, self.numel(), "character data")
     }
 
-    /// Decode a character array as UTF-16.
+    /// Decode all UTF-16 code units of a character array in column-major order.
     ///
     /// # Errors
     ///
     /// Returns an error for a non-character array or unpaired UTF-16 surrogate.
-    pub fn string(self) -> Result<String> {
+    pub fn decode_chars(self) -> Result<String> {
         String::from_utf16(self.chars()?).map_err(|error| {
             Error::new(ErrorKind::InvalidInput, "decode UTF-16", error.to_string())
         })
@@ -1260,24 +1250,15 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
     ///
     /// # Errors
     ///
-    /// Returns an error for a non-object or out-of-bounds index. The native
-    /// `mxSetProperty` operation has no status return; see
+    /// Returns an error for an out-of-bounds index or active workspace borrow.
+    /// Object and property errors are handled by native `mxSetProperty`, which
+    /// has no status return; see
     /// [`crate::error_handling`].
     pub fn set_property(&mut self, index: usize, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
         crate::runtime::require_unborrowed("set property")?;
         if index >= self.as_ref().numel() {
             return Err(Error::bounds("set property", index, self.as_ref().numel()));
         }
-        let existing =
-            unsafe { ffi::matrust_property_get(self.raw.as_ptr(), index, name.as_ptr()) };
-        let existing = NonNull::new(existing).ok_or_else(|| {
-            Error::new(
-                ErrorKind::Native,
-                "set property",
-                "property does not exist or is not public",
-            )
-        })?;
-        unsafe { ffi::matrust_array_destroy(existing.as_ptr()) };
         unsafe {
             ffi::matrust_property_set(self.raw.as_ptr(), index, name.as_ptr(), value.as_ptr())
         };
@@ -1358,8 +1339,7 @@ impl<'mex> Matlab<'mex> {
         &self,
         dimensions: &[usize],
     ) -> Result<UninitNumeric<'mex, T>> {
-        validate_dimensions(dimensions)?;
-        element_count(dimensions)?;
+        checked_numeric_count::<T>(dimensions)?;
         let raw = unsafe {
             ffi::matrust_create_uninit_numeric(
                 dimensions.len(),
@@ -1386,6 +1366,14 @@ impl<'mex> Matlab<'mex> {
         dimensions: &[usize],
         values: &[T],
     ) -> Result<OwnedArray<'mex>> {
+        let count = checked_numeric_count::<T>(dimensions)?;
+        if count != values.len() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "create numeric",
+                "shape/value length mismatch",
+            ));
+        }
         self.uninit_numeric::<T>(dimensions)?.fill(values)
     }
 
@@ -1458,7 +1446,7 @@ impl<'mex> Matlab<'mex> {
     /// # Errors
     ///
     /// Returns an error for length overflow or a null native allocation result.
-    pub fn string(&self, value: &str) -> Result<OwnedArray<'mex>> {
+    pub fn char_row(&self, value: &str) -> Result<OwnedArray<'mex>> {
         let utf16: Vec<u16> = value.encode_utf16().collect();
         self.char_array(&[1, utf16.len()], &utf16)
     }
@@ -1628,6 +1616,22 @@ fn element_count(dimensions: &[usize]) -> Result<usize> {
             )
         })
     })
+}
+
+fn checked_numeric_count<T: Numeric>(dimensions: &[usize]) -> Result<usize> {
+    validate_dimensions(dimensions)?;
+    let count = element_count(dimensions)?;
+    if count
+        .checked_mul(size_of::<T>())
+        .map_or(true, |bytes| bytes > isize::MAX as usize)
+    {
+        return Err(Error::new(
+            ErrorKind::Bounds,
+            "create numeric",
+            "buffer is too large for a Rust slice",
+        ));
+    }
+    Ok(count)
 }
 
 fn checked_slice<'a, T>(ptr: *const T, len: usize, operation: &'static str) -> Result<&'a [T]> {

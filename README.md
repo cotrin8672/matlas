@@ -9,7 +9,7 @@ different Rust types with different lifetimes and drop behavior.
 
 - MATLAB with `matrix.h`, `mex.h`, and `mat.h`
 - Rust and a native C compiler supported by MATLAB
-- MATLAB R2024a/API 800 is the v0.8 validation target
+- MATLAB R2024a/API 800 is the v0.9 validation target
 
 Set `MATLABROOT` to the MATLAB installation. The build script links the
 versioned API libraries and compiles the C shim automatically.
@@ -39,7 +39,20 @@ ID without another `Result`. Import `ResultExt` to use `.with_id(id)`,
 fallible operations while preserving the original error. See the
 [v0.8 migration notes](docs/ERROR_HANDLING.md#migration-from-v07).
 
-`OwnedArray` is the unique Rust owner and destroys its `mxArray` on drop.
+### Migration from v0.8
+
+- Read an exact, single numeric element with `array.as_scalar::<T>()`.
+  This rejects arrays with more than one element and never converts the class.
+- Use `cx.char_row(text)` to create a MATLAB character row and
+  `array.decode_chars()` to decode all of a character array's UTF-16 units.
+  These replace `Matlab::string` and `ArrayRef::string`; neither method creates
+  or reads a MATLAB `string` object.
+- `matlas::Complex<T>` now re-exports `num_complex::Complex<T>`. Use its `re`
+  and `im` fields instead of `real` and `imag`. Values from `num-complex` can be
+  passed directly to `numeric` and `scalar`.
+
+`OwnedArray` is the unique Rust owner and retires its `mxArray` on drop;
+destruction may wait until a workspace borrow or callback handoff completes.
 `ArrayRef` is read-only and cannot be destroyed or transferred. A
 `WorkspaceScope::get` borrows MATLAB workspace memory without copying it. A
 scope can fetch several `WorkspaceValue`s and pass them, with ordinary array
@@ -82,11 +95,12 @@ fn save_waveform(cx: &mut Matlab<'_>) -> Result<()> {
 ## Status
 
 The old `rustmat` and `rustmex` APIs are intentionally not dependencies.
-Windows is the supported target; v0.8 was validated on R2024a. The
+Windows is the supported target; v0.9 was validated on R2024a. The
 R2025a/API-800 audit covers all 178 published C functions: safe operations
 use lifetime-aware types, aliases use a more general
-safe operation, and ownership-adopting or non-local-exit operations remain
-explicitly unsafe in `matlas::raw`. See [API_COVERAGE.md](docs/API_COVERAGE.md)
+safe operation, and ownership-adopting or non-trapping callback and error
+operations remain explicitly unsafe in `matlas::raw`. Native allocation
+failure can still terminate a MEX function. See [API_COVERAGE.md](docs/API_COVERAGE.md)
 for the function-by-function inventory, [DESIGN.md](docs/DESIGN.md) for the
 ownership model, [ERROR_HANDLING.md](docs/ERROR_HANDLING.md) for what `Result`
 can and cannot catch, and [VALIDATION.md](docs/VALIDATION.md) for current checks.

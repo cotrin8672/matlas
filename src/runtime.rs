@@ -10,6 +10,7 @@ struct Entry {
 struct Runtime {
     invocation_depth: usize,
     active_external_borrows: usize,
+    callback_handoff_depth: usize,
     deferred_destroy: Vec<NonNull<ffi::RawArray>>,
     persistent: Vec<Option<Entry>>,
     next_generation: u64,
@@ -42,7 +43,10 @@ impl Drop for InvocationGuard {
         let pending = RUNTIME.with(|runtime| {
             let mut runtime = runtime.borrow_mut();
             runtime.invocation_depth -= 1;
-            if runtime.invocation_depth == 0 && runtime.active_external_borrows == 0 {
+            if runtime.invocation_depth == 0
+                && runtime.active_external_borrows == 0
+                && runtime.callback_handoff_depth == 0
+            {
                 Some(runtime.deferred_destroy.drain(..).collect::<Vec<_>>())
             } else {
                 None
@@ -63,10 +67,23 @@ pub(crate) fn begin_external_borrow() -> ExternalBorrowGuard {
 
 impl Drop for ExternalBorrowGuard {
     fn drop(&mut self) {
+        RUNTIME.with(|runtime| runtime.borrow_mut().active_external_borrows -= 1);
+    }
+}
+
+pub(crate) struct CallbackHandoffGuard;
+
+pub(crate) fn begin_callback_handoff() -> CallbackHandoffGuard {
+    RUNTIME.with(|runtime| runtime.borrow_mut().callback_handoff_depth += 1);
+    CallbackHandoffGuard
+}
+
+impl Drop for CallbackHandoffGuard {
+    fn drop(&mut self) {
         let pending = RUNTIME.with(|runtime| {
             let mut runtime = runtime.borrow_mut();
-            runtime.active_external_borrows -= 1;
-            if runtime.active_external_borrows == 0 {
+            runtime.callback_handoff_depth -= 1;
+            if runtime.callback_handoff_depth == 0 && runtime.active_external_borrows == 0 {
                 Some(runtime.deferred_destroy.drain(..).collect::<Vec<_>>())
             } else {
                 None
@@ -95,7 +112,7 @@ pub(crate) fn require_unborrowed(operation: &'static str) -> Result<()> {
 pub(crate) unsafe fn destroy_or_defer(raw: NonNull<ffi::RawArray>) {
     let destroy_now = RUNTIME.with(|runtime| {
         let mut runtime = runtime.borrow_mut();
-        if runtime.active_external_borrows == 0 {
+        if runtime.active_external_borrows == 0 && runtime.callback_handoff_depth == 0 {
             true
         } else {
             runtime.deferred_destroy.push(raw);
@@ -115,31 +132,39 @@ fn destroy_all(values: impl IntoIterator<Item = NonNull<ffi::RawArray>>) {
 
 pub(crate) fn persist(raw: NonNull<ffi::RawArray>) -> Result<(usize, u64)> {
     require_unborrowed("persist array")?;
+    let (slot, register_exit) = RUNTIME.with(|runtime| {
+        let mut runtime = runtime.borrow_mut();
+        let slot = runtime
+            .persistent
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(runtime.persistent.len());
+        if slot == runtime.persistent.len() {
+            runtime
+                .persistent
+                .try_reserve(1)
+                .map_err(|_| Error::allocation("register persistent array"))?;
+        }
+        Ok::<_, Error>((slot, !runtime.exit_registered))
+    })?;
+    if register_exit {
+        let status = unsafe { ffi::matrust_at_exit(at_exit) };
+        if status != 0 {
+            return Err(Error::native_status("register MEX cleanup", status));
+        }
+        RUNTIME.with(|runtime| runtime.borrow_mut().exit_registered = true);
+    }
+    unsafe { ffi::matrust_make_array_persistent(raw.as_ptr()) };
     RUNTIME.with(|runtime| {
         let mut runtime = runtime.borrow_mut();
-        if !runtime.exit_registered {
-            let status = unsafe { ffi::matrust_at_exit(at_exit) };
-            if status != 0 {
-                return Err(Error::native_status("register MEX cleanup", status));
-            }
-            runtime.exit_registered = true;
-        }
-        unsafe { ffi::matrust_make_array_persistent(raw.as_ptr()) };
         runtime.next_generation = runtime.next_generation.wrapping_add(1).max(1);
         let generation = runtime.next_generation;
-        if let Some((slot, vacant)) = runtime
-            .persistent
-            .iter_mut()
-            .enumerate()
-            .find(|(_, value)| value.is_none())
-        {
-            *vacant = Some(Entry { raw, generation });
-            Ok((slot, generation))
+        if slot < runtime.persistent.len() {
+            runtime.persistent[slot] = Some(Entry { raw, generation });
         } else {
-            let slot = runtime.persistent.len();
             runtime.persistent.push(Some(Entry { raw, generation }));
-            Ok((slot, generation))
         }
+        Ok((slot, generation))
     })
 }
 
@@ -157,7 +182,6 @@ pub(crate) fn persistent(slot: usize, generation: u64) -> Result<NonNull<ffi::Ra
 }
 
 pub(crate) fn remove_persistent(slot: usize, generation: u64) -> Result<()> {
-    require_unborrowed("remove persistent array")?;
     let raw = RUNTIME.with(|runtime| {
         let mut runtime = runtime.borrow_mut();
         let current = runtime
@@ -172,7 +196,7 @@ pub(crate) fn remove_persistent(slot: usize, generation: u64) -> Result<()> {
             .expect("checked persistent entry");
         Ok::<_, Error>(entry.raw)
     })?;
-    unsafe { ffi::matrust_array_destroy(raw.as_ptr()) };
+    unsafe { destroy_or_defer(raw) };
     Ok(())
 }
 

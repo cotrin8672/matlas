@@ -55,7 +55,7 @@ point implemented by `mex_entrypoint!`, not an API function called by users.
 | Safe | `mxIsNumeric`, `mxIsCell`, `mxIsLogical`, `mxIsChar`, `mxIsStruct`, `mxIsSparse`, `mxIsComplex`, `mxIsEmpty`, `mxIsScalar`, `mxIsObject`, `mxIsOpaque`, `mxIsFunctionHandle`, `mxIsClass`, `mxIsFromGlobalWS` | `ArrayRef::is_*` methods |
 | Alias | `mxIsDouble`, `mxIsSingle`, `mxIsInt8`, `mxIsUint8`, `mxIsInt16`, `mxIsUint16`, `mxIsInt32`, `mxIsUint32`, `mxIsInt64`, `mxIsUint64` | `ArrayRef::class` plus `Class`; exact predicates are raw |
 | Alias | `mxIsLogicalScalar`, `mxIsLogicalScalarTrue` | `is_logical`, `is_scalar`, and `logicals`; exact predicates are raw |
-| Safe | `mxGetScalar`, `mxGetData`, `mxGetChars`, `mxGetLogicals` | `ArrayRef::scalar`, `data`, `chars`, `logicals`, including sparse value accessors |
+| Safe/raw | `mxGetScalar`, `mxGetData`, `mxGetChars`, `mxGetLogicals` | `ArrayRef::as_scalar::<T>` reads exactly one matching numeric element; `data`, `chars`, `logicals` and sparse value accessors are safe. The converting first-element `mxGetScalar` remains raw |
 | Alias | `mxGetDoubles`, `mxGetSingles`, `mxGetInt8s`, `mxGetUint8s`, `mxGetInt16s`, `mxGetUint16s`, `mxGetInt32s`, `mxGetUint32s`, `mxGetInt64s`, `mxGetUint64s` | `ArrayRef::data::<T>`; exact getters are raw |
 | Alias | `mxGetComplexDoubles`, `mxGetComplexSingles`, `mxGetComplexInt8s`, `mxGetComplexUint8s`, `mxGetComplexInt16s`, `mxGetComplexUint16s`, `mxGetComplexInt32s`, `mxGetComplexUint32s`, `mxGetComplexInt64s`, `mxGetComplexUint64s` | `ArrayRef::data::<Complex<T>>`; exact getters are raw |
 | Alias | `mxGetPr` | `ArrayRef::data::<f64>`; exact compatibility getter is raw |
@@ -63,9 +63,9 @@ point implemented by `mex_entrypoint!`, not an API function called by users.
 | Alias | `mxCreateNumericMatrix`, `mxCreateUninitNumericMatrix`, `mxCreateDoubleMatrix`, `mxCreateDoubleScalar` | the same constructors with `[m, n]`, or `Matlab::scalar`; exact constructors are raw |
 | Safe | `mxCreateLogicalArray`, `mxCreateSparseLogicalMatrix` | `Matlab::logical`, `logical_sparse` |
 | Alias | `mxCreateLogicalMatrix`, `mxCreateLogicalScalar` | `Matlab::logical` with `[m, n]`; exact constructors are raw |
-| Safe | `mxCreateCharArray`, `mxCreateString`, `mxCreateStringFromNChars` | UTF-16-safe `Matlab::char_array` and `string`; exact locale-dependent constructors are raw |
+| Safe | `mxCreateCharArray`, `mxCreateString`, `mxCreateStringFromNChars` | UTF-16-safe `Matlab::char_array` and `char_row`; exact locale-dependent constructors are raw |
 | Safe/raw | `mxCreateCharMatrixFromStrings` | UTF-16-safe `Matlab::char_matrix`; the exact locale-dependent constructor is raw |
-| Safe | `mxArrayToString`, `mxArrayToUTF8String`, `mxGetString`, `mxGetNChars` | `ArrayRef::to_local`, `to_utf8`, `chars`, `string`; exact shims are raw |
+| Safe | `mxArrayToString`, `mxArrayToUTF8String`, `mxGetString`, `mxGetNChars` | `ArrayRef::to_local`, `to_utf8`, `chars`, `decode_chars`; exact shims are raw |
 | Safe | `mxCreateCellArray`, `mxCreateStructArray` | `Matlab::cell`, `structure` |
 | Alias | `mxCreateCellMatrix`, `mxCreateStructMatrix` | the same constructors with `[m, n]`; exact constructors are raw |
 | Safe | `mxCreateSparse`, `mxGetNzmax`, `mxGetIr`, `mxGetJc` | `Matlab::sparse`, `ArrayRef::sparse_indices`, `sparse_data` |

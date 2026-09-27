@@ -27,10 +27,14 @@ the source `mxArray`.
 `Result` cannot turn a native non-local exit into Rust unwinding. MATLAB
 documents that many `mxCreate*` allocation failures terminate a MEX function
 instead of returning null. Void C operations such as `mxSetProperty` likewise
-have no status channel. These calls are memory-safe when their documented
-preconditions hold, but an out-of-memory termination or MATLAB-side abort can
-skip Rust destructors. This is a limitation of the C MEX ABI, not a recoverable
-Rust error.
+have no status channel. An out-of-memory termination or MATLAB-side abort can
+skip Rust destructors. The Rust Reference does not permit discarding Rust
+frames without running their destructors, so v0.9 does not claim that such a
+native exit is safely recoverable. The exact control transfer and a possible
+C-only trapping boundary still need isolated validation before 1.0. See the
+[MATLAB allocation behavior](https://www.mathworks.com/help/matlab/apiref/mxcreatenumericarray.html),
+[MATLAB MEX cleanup behavior](https://www.mathworks.com/help/matlab/matlab_external/automatic-cleanup-of-temporary-arrays.html),
+and [Rust's runtime assumptions](https://doc.rust-lang.org/reference/behavior-considered-undefined.html).
 
 Non-trapping callbacks, MATLAB error functions, pointer adoption, allocator
 replacement, and other operations that can bypass the ownership model are only
