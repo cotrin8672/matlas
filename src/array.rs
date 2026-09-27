@@ -168,23 +168,7 @@ impl<'a> TryFrom<ArrayRef<'a>> for PlainArrayRef<'a> {
     type Error = Error;
 
     fn try_from(value: ArrayRef<'a>) -> Result<Self> {
-        if matches!(
-            value.class(),
-            Some(
-                Class::Logical
-                    | Class::Char
-                    | Class::Double
-                    | Class::Single
-                    | Class::Int8
-                    | Class::Uint8
-                    | Class::Int16
-                    | Class::Uint16
-                    | Class::Int32
-                    | Class::Uint32
-                    | Class::Int64
-                    | Class::Uint64
-            )
-        ) {
+        if value.is_plain() {
             Ok(Self(value))
         } else {
             Err(Error::new(
@@ -541,6 +525,31 @@ impl<'a> ArrayRef<'a> {
     /// Test whether this is a numeric array.
     pub fn is_numeric(self) -> bool {
         unsafe { ffi::matrust_array_is_numeric(self.as_ptr()) != 0 }
+    }
+
+    /// Test whether this array is accepted by [`PlainArrayRef`].
+    ///
+    /// Numeric, logical, and character arrays are accepted, including sparse
+    /// numeric/logical arrays. Cell, struct, string, object, and other classes
+    /// are excluded. This uses the same check as the validated conversion.
+    pub fn is_plain(self) -> bool {
+        matches!(
+            self.class(),
+            Some(
+                Class::Logical
+                    | Class::Char
+                    | Class::Double
+                    | Class::Single
+                    | Class::Int8
+                    | Class::Uint8
+                    | Class::Int16
+                    | Class::Uint16
+                    | Class::Int32
+                    | Class::Uint32
+                    | Class::Int64
+                    | Class::Uint64
+            )
+        )
     }
     /// Test whether this is a cell array.
     pub fn is_cell(self) -> bool {

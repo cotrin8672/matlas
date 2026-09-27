@@ -22,7 +22,7 @@ pub use array::{
     ArrayMut, ArrayRef, Class, Complex, Numeric, OwnedArray, PersistentArray, PlainArrayRef,
     SparseIndices, SparseNumeric, UninitNumeric,
 };
-pub use error::{Error, ErrorKind, MatError, Result};
+pub use error::{Error, ErrorId, ErrorKind, MatError, Result, ResultExt};
 
 /// Function-by-function coverage of the R2025a API-800 C headers.
 #[doc = include_str!("../docs/API_COVERAGE.md")]
@@ -578,6 +578,11 @@ impl WorkspaceValue<'_> {
     /// Borrow the referenced MATLAB-owned array.
     pub fn as_ref(&self) -> ArrayRef<'_> {
         unsafe { ArrayRef::from_raw(self.raw) }
+    }
+
+    /// Test whether this value is accepted by [`Self::plain`] without creating an error.
+    pub fn is_plain(&self) -> bool {
+        self.as_ref().is_plain()
     }
 
     /// Validate that this workspace value can be serialized without a MATLAB callback.

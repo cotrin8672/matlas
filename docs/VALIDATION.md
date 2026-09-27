@@ -1,8 +1,16 @@
 # Validation
 
-Current v0.7.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.97.1.
+Current v0.8.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.97.1.
 The declared Rust 1.77 minimum was checked by building the full workspace
 with `cargo +1.77.0 build --workspace --locked`.
+
+The v0.8.0 checks passed on 2026-09-27. Rust tests cover dynamic ID validation
+through the 255-byte limit, compile-time rejection of invalid literal IDs,
+preservation of native error fields, context order, and lazy context generation.
+The MATLAB suite checks 28 plain/non-plain values through both `ArrayRef` and
+`WorkspaceValue`, including sparse, empty, string, cell, struct, object, and
+function-handle values. It also verifies that a custom ID and nested context
+reach MATLAB while preserving the original trapped exception ID and message.
 
 The v0.7.0 guarded workspace/MAT-file case passed on R2024a on 2026-09-25:
 active workspace values reject property access, generic MAT-file writes, and
@@ -36,4 +44,5 @@ propagation, including zero-input and zero-output calls. The suite also covers
 workspace borrows/copies, guarded object property access and MAT-file operations,
 primitive zero-copy MAT-file writes, structure field ownership,
 reshape and real/complex conversion, metadata bits, and `mxRealloc` data
-preservation.
+preservation. The v0.8 cases add plain classification and contextual error
+propagation without changing the native API surface.

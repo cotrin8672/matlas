@@ -18,7 +18,7 @@ fn run<'mex>(
     } else if value.is_numeric() {
         return Err(
             Error::new(ErrorKind::InvalidInput, "fixed MEX", "numeric input")
-                .with_id("matlasTest:CustomInput")?,
+                .with_id(matlas::error_id!("matlasTest:CustomInput")),
         );
     } else {
         return Err(Error::new(

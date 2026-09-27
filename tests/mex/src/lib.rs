@@ -1,6 +1,6 @@
 use matlas::{
     Complex, Error, ErrorKind, Inputs, MatFile, MatVersion, Matlab, OpenMode, Outputs,
-    PlainArrayRef, Result, VariableInfos, Variables, Workspace,
+    PlainArrayRef, Result, ResultExt, VariableInfos, Variables, Workspace,
 };
 use std::{cell::RefCell, ffi::CString};
 
@@ -460,6 +460,25 @@ fn run<'mex>(
             reader.close()?;
             values.close()?;
             outputs.set(0, cx.scalar(0.0)?)?;
+        }
+        34 => {
+            let expected = inputs.get(2).unwrap().logical_scalar()?;
+            let ws = cx.workspace_scope(Workspace::Caller);
+            let value = ws.get(c"plain_candidate")?;
+            assert_eq!(value.is_plain(), expected);
+            assert_eq!(value.as_ref().is_plain(), expected);
+            assert_eq!(value.plain().is_ok(), expected);
+            assert_eq!(PlainArrayRef::try_from(value.as_ref()).is_ok(), expected);
+        }
+        35 => {
+            let identifier = cx.string("matlasTest:OriginalCause")?;
+            let message = cx.string("original callback failure")?;
+            return cx
+                .call(c"error", &[identifier.as_ref(), message.as_ref()], 0)
+                .map(|_| ())
+                .with_id(matlas::error_id!("matlasTest:Context"))
+                .context("inner context")
+                .with_context(|| String::from("outer context"));
         }
         _ => {
             return Err(Error::new(

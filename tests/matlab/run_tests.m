@@ -210,7 +210,26 @@ catch e
     assert(contains(e.message, 'intentional eval failure'), e.message);
 end
 run_v06_tests;
-fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.7\n', checks);
+fprintf('MATLAS_STAGE v08_plain\n');
+plainCandidates = [values, {"text", strings(0, 0), struct, MatlasTestObject, @sin}];
+for i = 1:numel(plainCandidates)
+    plain_candidate = plainCandidates{i};
+    expected = isnumeric(plain_candidate) || islogical(plain_candidate) || ischar(plain_candidate);
+    assert(matlas_integration(34, 3, expected) == 0);
+end
+fprintf('MATLAS_STAGE v08_error_context\n');
+try
+    matlas_integration(35, 3);
+    error('matlas:test:noContextError', 'Expected a contextual callback error');
+catch e
+    assert(strcmp(e.identifier, 'matlasTest:Context'), e.message);
+    assert(contains(e.message, sprintf('outer context\n  inner context\n  ')), e.message);
+    assert(contains(e.message, 'call MATLAB'), e.message);
+    assert(contains(e.message, 'matlasTest:OriginalCause: original callback failure'), e.message);
+end
+assert(isequal(matlas_fixed_integration("after context error"), 'after context error'));
+fprintf('MATLAS_V08_PASS %d plain classifications; typed ID; nested context; original callback cause\n', numel(plainCandidates));
+fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.8\n', checks);
 end
 
 function verifyFormat(path, version)

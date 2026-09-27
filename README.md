@@ -9,7 +9,7 @@ different Rust types with different lifetimes and drop behavior.
 
 - MATLAB with `matrix.h`, `mex.h`, and `mat.h`
 - Rust and a native C compiler supported by MATLAB
-- MATLAB R2024a/API 800 is the v0.7 validation target
+- MATLAB R2024a/API 800 is the v0.8 validation target
 
 Set `MATLABROOT` to the MATLAB installation. The build script links the
 versioned API libraries and compiles the C shim automatically.
@@ -32,7 +32,12 @@ Fixed input and output counts are checked before the handler runs. Omitting
 the const parameters keeps the existing variable-count API. `ArrayRef::to_text`
 reads a character row or scalar MATLAB string; `logical_scalar` reads and
 creates MATLAB logical scalars. `call_array::<N>` returns a fixed number of
-callback outputs, and `Error::with_id` sets a validated MATLAB exception ID.
+callback outputs. `error_id!` validates static exception IDs at compile time;
+`ErrorId::try_from(String)` validates dynamic IDs. `Error::with_id` attaches an
+ID without another `Result`. Import `ResultExt` to use `.with_id(id)`,
+`.context("description")`, and `.with_context(|| format!(...))` directly on
+fallible operations while preserving the original error. See the
+[v0.8 migration notes](docs/ERROR_HANDLING.md#migration-from-v07).
 
 `OwnedArray` is the unique Rust owner and destroys its `mxArray` on drop.
 `ArrayRef` is read-only and cannot be destroyed or transferred. A
@@ -43,8 +48,9 @@ values; it rejects any workspace values left live outside the call.
 `WorkspaceScope` can coexist with a `MatFile`; callback-capable operations
 return `Busy` while a workspace value is live. For a primitive workspace array,
 `WorkspaceValue::plain` validates its class and `MatFile::put_plain` writes it
-without first duplicating the source array. Cell, struct, string, and object
-arrays are excluded from this path.
+without first duplicating the source array. `ArrayRef::is_plain` and
+`WorkspaceValue::is_plain` query the same classification without creating an
+error. Cell, struct, string, and object arrays are excluded from this path.
 
 ```rust,no_run
 # use matlas::{ArrayRef, Matlab, Result, Workspace};
@@ -76,7 +82,7 @@ fn save_waveform(cx: &mut Matlab<'_>) -> Result<()> {
 ## Status
 
 The old `rustmat` and `rustmex` APIs are intentionally not dependencies.
-Windows is the supported target; v0.7 was validated on R2024a. The
+Windows is the supported target; v0.8 was validated on R2024a. The
 R2025a/API-800 audit covers all 178 published C functions: safe operations
 use lifetime-aware types, aliases use a more general
 safe operation, and ownership-adopting or non-local-exit operations remain
