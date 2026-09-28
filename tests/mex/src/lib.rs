@@ -1,5 +1,5 @@
 use matlas::{
-    Complex, Error, ErrorKind, Inputs, MatFile, MatVersion, Matlab, OpenMode, Outputs,
+    Complex, DynInputs, Error, ErrorKind, MatFile, MatVersion, Matlab, OpenMode, Outputs,
     PlainArrayRef, Result, ResultExt, VariableInfos, Variables, Workspace,
 };
 use std::{cell::RefCell, ffi::CString};
@@ -9,11 +9,11 @@ thread_local! {
     static MODULE_LOCK: RefCell<Option<matlas::ModuleLock>> = const { RefCell::new(None) };
 }
 
-matlas::mex_entrypoint!(run);
+matlas::mex_entrypoint!(run, dynamic);
 
 fn run<'mex>(
     cx: &mut Matlab<'mex>,
-    inputs: Inputs<'mex>,
+    inputs: DynInputs<'mex>,
     outputs: &mut Outputs<'mex>,
 ) -> Result<()> {
     if inputs.len() < 2 {
@@ -344,11 +344,11 @@ fn run<'mex>(
             assert_eq!(buffer.as_bytes(), &[0; 5]);
             assert!(matches!(
                 buffer.resize(isize::MAX as usize + 1),
-                Err(error) if error.kind == ErrorKind::Bounds
+                Err(error) if error.kind() == ErrorKind::Bounds
             ));
             assert!(matches!(
                 cx.calloc(isize::MAX as usize + 1),
-                Err(error) if error.kind == ErrorKind::Bounds
+                Err(error) if error.kind() == ErrorKind::Bounds
             ));
             outputs.set(0, value)?;
         }
@@ -378,7 +378,7 @@ fn run<'mex>(
                     "unexpected original value",
                 ));
             }
-            let mut object = cx.duplicate(input)?;
+            let object = cx.duplicate(input)?;
             if object.property(0, c"Value")?.as_ref().as_scalar::<f64>()? != 11.0 {
                 return Err(Error::new(
                     ErrorKind::Native,
@@ -387,10 +387,8 @@ fn run<'mex>(
                 ));
             }
             let replacement = cx.scalar(22.0)?;
-            object
-                .as_mut()
-                .set_property(0, c"Value", replacement.as_ref())?;
-            outputs.set(0, object.property(0, c"Value")?)?;
+            let updated = cx.with_property(object.as_ref(), 0, c"Value", replacement.as_ref())?;
+            outputs.set(0, updated.property(0, c"Value")?)?;
         }
         30 => {
             let ws = cx.workspace_scope(Workspace::Caller);
@@ -411,7 +409,7 @@ fn run<'mex>(
             let passed = ws.get(c"from_caller_scalar")?;
             let unused = ws.get(c"second_caller_scalar")?;
             let result = ws.call(c"plus", [passed.into()], 1);
-            if !matches!(result, Err(ref error) if error.kind == ErrorKind::Busy) {
+            if !matches!(result, Err(ref error) if error.kind() == ErrorKind::Busy) {
                 return Err(Error::new(
                     ErrorKind::Native,
                     "workspace scope",
@@ -424,7 +422,7 @@ fn run<'mex>(
         }
         33 => {
             let object = inputs.get(2).unwrap();
-            let mut owned = cx.duplicate(object)?;
+            let owned = cx.duplicate(object)?;
             let mut file = MatFile::create_with_format(cx, "guarded.mat", MatVersion::V73)?;
             let mut reader = MatFile::open(cx, "callback.mat", OpenMode::Read)?;
             let mut values = Variables::open(cx, "callback.mat")?;
@@ -432,28 +430,25 @@ fn run<'mex>(
             let borrowed = ws.get(c"matlas_borrowed")?;
 
             assert!(
-                matches!(cx.property(object, 0, c"Value"), Err(error) if error.kind == ErrorKind::Busy)
+                matches!(cx.property(object, 0, c"Value"), Err(error) if error.kind() == ErrorKind::Busy)
             );
             assert!(
-                matches!(owned.property(0, c"Value"), Err(error) if error.kind == ErrorKind::Busy)
+                matches!(owned.property(0, c"Value"), Err(error) if error.kind() == ErrorKind::Busy)
             );
             assert!(
-                matches!(owned.as_mut().set_property(0, c"Value", borrowed.as_ref()), Err(error) if error.kind == ErrorKind::Busy)
+                matches!(file.put(c"object", object), Err(error) if error.kind() == ErrorKind::Busy)
             );
             assert!(
-                matches!(file.put(c"object", object), Err(error) if error.kind == ErrorKind::Busy)
+                matches!(file.put_global(c"object", object), Err(error) if error.kind() == ErrorKind::Busy)
             );
+            assert!(matches!(reader.get(c"object"), Err(error) if error.kind() == ErrorKind::Busy));
+            assert!(matches!(values.next(), Some(Err(error)) if error.kind() == ErrorKind::Busy));
             assert!(
-                matches!(file.put_global(c"object", object), Err(error) if error.kind == ErrorKind::Busy)
-            );
-            assert!(matches!(reader.get(c"object"), Err(error) if error.kind == ErrorKind::Busy));
-            assert!(matches!(values.next(), Some(Err(error)) if error.kind == ErrorKind::Busy));
-            assert!(
-                matches!(PlainArrayRef::try_from(object), Err(error) if error.kind == ErrorKind::InvalidInput)
+                matches!(PlainArrayRef::try_from(object), Err(error) if error.kind() == ErrorKind::InvalidInput)
             );
             for index in 3..=5 {
                 assert!(
-                    matches!(PlainArrayRef::try_from(inputs.get(index).unwrap()), Err(error) if error.kind == ErrorKind::InvalidInput)
+                    matches!(PlainArrayRef::try_from(inputs.get(index).unwrap()), Err(error) if error.kind() == ErrorKind::InvalidInput)
                 );
             }
 
@@ -479,12 +474,18 @@ fn run<'mex>(
         35 => {
             let identifier = cx.char_row("matlasTest:OriginalCause")?;
             let message = cx.char_row("original callback failure")?;
-            return cx
+            let error = cx
                 .call(c"error", &[identifier.as_ref(), message.as_ref()], 0)
                 .map(|_| ())
                 .with_id(matlas::error_id!("matlasTest:Context"))
                 .context("inner context")
-                .with_context(|| String::from("outer context"));
+                .with_context(|| String::from("outer context"))
+                .unwrap_err();
+            assert_eq!(error.id(), "matlasTest:Context");
+            let original = error.matlab_error().unwrap();
+            assert_eq!(original.identifier(), Some("matlasTest:OriginalCause"));
+            assert_eq!(original.message(), Some("original callback failure"));
+            return Err(error);
         }
         36 => {
             let chars = cx.char_row("A\0日本語")?;
@@ -502,16 +503,13 @@ fn run<'mex>(
             assert!(vector.as_ref().as_scalar::<f64>().is_err());
             assert!(matches!(
                 cx.numeric::<f64>(&[1_000_000, 1_000_000], &[]),
-                Err(error) if error.kind == ErrorKind::InvalidInput
+                Err(error) if error.kind() == ErrorKind::InvalidInput
             ));
         }
         37 => {
             let input = inputs.get(2).unwrap();
-            let mut object = cx.duplicate(input)?;
             let replacement = cx.scalar(22.0)?;
-            object
-                .as_mut()
-                .set_property(0, c"Value", replacement.as_ref())?;
+            let _updated = cx.with_property(input, 0, c"Value", replacement.as_ref())?;
         }
         38 => {
             let [mutator] = cx.call_array(c"MatlasDropMutator", &[])?;
@@ -534,8 +532,180 @@ fn run<'mex>(
             let [mutator] = cx.call_array(c"MatlasDropMutator", &[])?;
             let ws = cx.workspace_scope(Workspace::Base);
             let borrowed = ws.get(c"matlas_handoff_input")?;
-            assert!(matches!(mutator.persist(), Err(error) if error.kind == ErrorKind::Busy));
+            assert!(matches!(mutator.persist(), Err(error) if error.kind() == ErrorKind::Busy));
             drop(borrowed);
+        }
+        41 => {
+            let object = inputs.get(2).unwrap();
+            let replacement = cx.scalar(22.0)?;
+            let result = cx.with_property(object, 0, c"Value", replacement.as_ref());
+            assert!(
+                matches!(result, Err(error) if error.kind() == ErrorKind::Callback
+                    && error.detail().contains("matlasTest:SetterFailed")
+                    && error.matlab_error().and_then(|info| info.identifier()) == Some("matlasTest:SetterFailed"))
+            );
+        }
+        42 => {
+            let object = inputs.get(2).unwrap();
+            let replacement = cx.scalar(22.0)?;
+            let updated = cx.with_property(object, 1, c"Value", replacement.as_ref())?;
+            assert_eq!(object.numel(), 2);
+            assert_eq!(
+                updated.property(0, c"Value")?.as_ref().as_scalar::<f64>()?,
+                11.0
+            );
+            assert_eq!(
+                updated.property(1, c"Value")?.as_ref().as_scalar::<f64>()?,
+                22.0
+            );
+            assert_eq!(
+                cx.property(object, 1, c"Value")?
+                    .as_ref()
+                    .as_scalar::<f64>()?,
+                33.0
+            );
+        }
+        43 => {
+            let kind = inputs.get(2).unwrap().as_scalar::<f64>()? as u8;
+            let parent = match kind {
+                0 => cx.cell(&[1, 1])?,
+                1 => cx.structure(&[1, 1], &[c"Value"])?,
+                2 => {
+                    let mut outer = cx.cell(&[1, 1])?;
+                    outer.as_mut().replace_cell(0, Some(cx.cell(&[1, 1])?))?;
+                    outer
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::InvalidInput,
+                        "persistent test",
+                        "unknown kind",
+                    ))
+                }
+            };
+            let parent = parent.persist()?;
+            PERSISTENT.with(|slot| *slot.borrow_mut() = Some(parent));
+        }
+        44 => {
+            let kind = inputs.get(2).unwrap().as_scalar::<f64>()? as u8;
+            let replacement = cx.duplicate(inputs.get(3).unwrap())?;
+            let previous = PERSISTENT.with(|slot| -> Result<_> {
+                let mut slot = slot.borrow_mut();
+                let saved = slot.as_mut().ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidInput, "persistent test", "no parent")
+                })?;
+                let mut parent = saved.as_mut(cx)?;
+                match kind {
+                    0 => parent.replace_cell(0, Some(replacement)),
+                    1 => parent.replace_field(0, c"Value", Some(replacement)),
+                    2 => parent
+                        .cell_mut(0)?
+                        .ok_or_else(|| {
+                            Error::new(ErrorKind::InvalidInput, "persistent test", "no nested cell")
+                        })?
+                        .replace_cell(0, Some(replacement)),
+                    _ => Err(Error::new(
+                        ErrorKind::InvalidInput,
+                        "persistent test",
+                        "unknown kind",
+                    )),
+                }
+            })?;
+            outputs.set(
+                0,
+                match previous {
+                    Some(previous) => previous,
+                    None => cx.scalar(0.0)?,
+                },
+            )?;
+        }
+        45 => {
+            let kind = inputs.get(2).unwrap().as_scalar::<f64>()? as u8;
+            let current = PERSISTENT.with(|slot| -> Result<_> {
+                let slot = slot.borrow();
+                let saved = slot.as_ref().ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidInput, "persistent test", "no parent")
+                })?;
+                let parent = saved.as_ref(cx)?;
+                let child = match kind {
+                    0 => parent.cell(0)?,
+                    1 => parent.field(0, c"Value")?,
+                    2 => parent
+                        .cell(0)?
+                        .ok_or_else(|| {
+                            Error::new(ErrorKind::InvalidInput, "persistent test", "no nested cell")
+                        })?
+                        .cell(0)?,
+                    _ => {
+                        return Err(Error::new(
+                            ErrorKind::InvalidInput,
+                            "persistent test",
+                            "unknown kind",
+                        ))
+                    }
+                }
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidInput, "persistent test", "no child")
+                })?;
+                cx.duplicate(child)
+            })?;
+            outputs.set(0, current)?;
+        }
+        46 => {
+            PERSISTENT.with(|slot| -> Result<_> {
+                let mut slot = slot.borrow_mut();
+                let saved = slot.as_mut().ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidInput, "persistent test", "no parent")
+                })?;
+                saved.as_mut(cx)?.remove_field(0)?;
+                assert!(saved.as_ref(cx)?.field_number(c"Value")?.is_none());
+                Ok(())
+            })?;
+        }
+        47 => {
+            let mut file = MatFile::create(cx, "context.mat")?;
+            let value = cx.scalar(21.0)?;
+            file.put(c"x", value.as_ref())?;
+            let [sum] = cx.call_array(c"plus", &[value.as_ref(), value.as_ref()])?;
+            file.put(c"y", sum.as_ref())?;
+            file.close()?;
+            outputs.set_first(sum)?;
+        }
+        48 => {
+            let doubled = PERSISTENT.with(|slot| -> Result<_> {
+                let slot = slot.borrow();
+                let saved = slot.as_ref().ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidInput, "persistent test", "no value")
+                })?;
+                let view = saved.as_ref(cx)?;
+                let [doubled] = cx.call_array(c"plus", &[view, view])?;
+                Ok(doubled)
+            })?;
+            outputs.set_first(doubled)?;
+        }
+        49 => {
+            let [_command, _format] = inputs.require::<2>()?;
+            outputs.require_range(0..=1)?;
+            assert_eq!(outputs.requested(), outputs.len());
+            if outputs.requested() == 0 {
+                assert!(outputs.set(0, cx.scalar(-1.0)?).is_err());
+            }
+            outputs.set_first(cx.scalar(42.0)?)?;
+        }
+        50 => {
+            outputs.require_range(0..=1)?;
+        }
+        51 => {
+            outputs.require_len(2)?;
+            outputs.set_first(cx.scalar(1.0)?)?;
+        }
+        52 => {
+            outputs.require_len(1)?;
+            outputs.set_first(cx.scalar(1.0)?)?;
+            assert!(matches!(
+                outputs.set_first(cx.scalar(2.0)?),
+                Err(error) if error.kind() == ErrorKind::InvalidInput
+            ));
         }
         _ => {
             return Err(Error::new(
@@ -566,6 +736,14 @@ fn run<'mex>(
                 | 32
                 | 33
                 | 38
+                | 44
+                | 45
+                | 47
+                | 48
+                | 49
+                | 50
+                | 51
+                | 52
         )
     {
         outputs.set(0, cx.scalar(0.0)?)?;

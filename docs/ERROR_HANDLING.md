@@ -12,7 +12,7 @@ status or null pointer:
 |---|---|
 | invalid shape, type, index, mode, name, or active workspace borrow | validated before the native mutation and returned as `Err` |
 | MAT-file status/null return | `Err` with the operation, status, and current `matGetErrno` where available |
-| `mexCallMATLABWithTrap` / `mexEvalStringWithTrap` exception | `Err(ErrorKind::Callback)` with the MATLAB identifier/message after the trap and any partial outputs are destroyed |
+| `mexCallMATLABWithTrap` / `mexEvalStringWithTrap` exception | `Err(ErrorKind::Callback)` with the original MATLAB identifier/message available through `Error::matlab_error()` after the trap and any partial outputs are destroyed; `Matlab::with_property` uses the trapped `subsasgn` path |
 | explicit `MatFile::close` failure | `Err(ErrorKind::Close)`; implicit `Drop` still closes but cannot report a status |
 | iterator read failure | an `Err` iterator item; the owned file still closes on drop |
 
@@ -26,10 +26,11 @@ the source `mxArray`.
 
 `Result` cannot turn a native non-local exit into Rust unwinding. MATLAB
 documents that many `mxCreate*` allocation failures terminate a MEX function
-instead of returning null. Void C operations such as `mxSetProperty` likewise
-have no status channel. An out-of-memory termination or MATLAB-side abort can
+instead of returning null. The void native `mxSetProperty` has no status
+channel and remains raw; safe property assignment uses trapped `subsasgn` and
+returns the updated object. An out-of-memory termination or MATLAB-side abort can
 skip Rust destructors. The Rust Reference does not permit discarding Rust
-frames without running their destructors, so v0.9 does not claim that such a
+frames without running their destructors, so matlas does not claim that such a
 native exit is safely recoverable. The exact control transfer and a possible
 C-only trapping boundary still need isolated validation before 1.0. See the
 [MATLAB allocation behavior](https://www.mathworks.com/help/matlab/apiref/mxcreatenumericarray.html),
@@ -52,9 +53,11 @@ with a letter and containing only letters, digits, or underscores, with a
 255-byte limit for the complete ID.
 
 `Error::with_id` accepts an `ErrorId` and returns `Error` directly. It replaces
-only the identifier exposed to MATLAB; `kind`, `operation`, `detail`, `status`,
-and `mat_error` keep the original cause. The last ID supplied wins. Without a
-custom ID, the default still comes from `ErrorKind`.
+only the identifier exposed to MATLAB; the original callback identifier and
+message in `Error::matlab_error()` remain available. The last ID supplied
+wins. Without a custom ID, the default still comes from `ErrorKind`. Error
+fields are read through `kind()`, `operation()`, `detail()`,
+`native_status()`, and `mat_error()`.
 
 Import `ResultExt` to attach IDs and context directly to `matlas::Result<T>`:
 
@@ -64,7 +67,7 @@ use std::ffi::CStr;
 
 const WRITE_FAILED: ErrorId = error_id!("store:FileWriteFailed");
 
-fn save(file: &mut MatFile<'_, '_>, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
+fn save(file: &mut MatFile<'_>, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
     file.put(name, value)
         .with_id(WRITE_FAILED)
         .with_context(|| format!("Could not save Value '{}'.", name.to_string_lossy()))
@@ -77,6 +80,10 @@ unchanged. Context does not change the identifier or overwrite the original
 detail, including a trapped MATLAB exception's original ID and message.
 Repeated context is displayed from outermost (last added) to innermost,
 followed by the original operation, detail, and native status codes.
+The original MATLAB identifier and message appear once in `Display`, which
+the MEX entrypoint forwards to MATLAB. `matlab_error()` holds only these two
+copied fields; it does not preserve `MException.stack`, nested causes, or the
+exception object for rethrowing.
 
 `ResultExt::with_id` applies to every error, including `Busy` and validation
 errors. Use it where one public ID represents all failures of the operation;

@@ -1,8 +1,15 @@
 # Validation
 
-Current v0.9.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.97.1.
+Current v0.10.0 local checks use MATLAB R2024a/API 800, MSVC, and Rust 1.97.1.
 The declared Rust 1.77 minimum was checked by building the full workspace
 with `cargo +1.77.0 build --workspace --locked`.
+
+The v0.10.0 checks passed on 2026-09-28. Rust unit and doc tests, Clippy,
+rustdoc, formatting, and the 178-function API audit passed. The MATLAB suite
+passed 156 array-direction checks across five MAT-file formats. The new cases
+cover caught property setter exceptions and returned value objects, replacement
+of persistent cell and struct children, callback use while a MAT-file stays
+open, persistent read borrows, optional `ans`, and complete requested outputs.
 
 The v0.9.0 checks passed on 2026-09-27. Rust tests cover dynamic ID validation
 through the 255-byte limit, compile-time rejection of invalid literal IDs,

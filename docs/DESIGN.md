@@ -9,9 +9,12 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
   destruction at a safe runtime boundary.
 - `ArrayRef<'a>` is a read-only borrow from an input, owned array, cell, or
   struct. It has no destructor and cannot be transferred to MATLAB.
-- `ArrayMut<'a, 'mex>` is an exclusive borrow of an owned array. Replacing a
-  cell/field consumes an `OwnedArray`, making transfer explicit.
-- `WorkspaceScope<'a, 'mex>` shares `Matlab` with MAT-file handles while multiple
+- `ArrayMut<'a, 'mex>` is an exclusive borrow of an owned or persistent array.
+  Replacing a cell/field consumes an `OwnedArray`. When the view comes from
+  persistent storage, the displaced child is deep-copied before returning it;
+  the original is destroyed after detachment. Nested cell views retain this
+  distinction, so only temporary copies can become MEX outputs.
+- `WorkspaceScope<'a, 'mex>` can coexist with MAT-file handles while multiple
   `WorkspaceValue<'a>` pointers from `mexGetVariablePtr` are fetched. Each value
   holds an external-borrow guard. Operations that can run MATLAB code, including
   property accessors and generic MAT-file serialization, return `Busy` while a
@@ -31,25 +34,38 @@ The C shim is private; safe callers never manipulate an `mxArray*` directly.
   between MEX invocations. Reading, mutating, or explicitly removing it
   requires the current invocation's `Matlab<'mex>` context. Dropping it
   retires the MATLAB array even if a workspace value is borrowed; the MEX exit
-  hook is a final cleanup path.
+  hook is a final cleanup path. Borrowed children stay under the parent; use
+  `Matlab::duplicate` before passing one to a MEX output.
 - `ArrayInfo<'mex>` owns metadata returned by `matGetVariableInfo` but exposes
   no public conversion to `ArrayRef`, because MATLAB fills its data pointers
   with non-dereferenceable sentinels.
 
 The `Matlab<'mex>` brand is invariant and thread-bound. MEX entrypoints create
 it internally; `Matlab::attach` is unsafe for standalone/manual integration.
+`MatFile<'mex>` stores the invocation brand without borrowing the `Matlab`
+variable, so a file may remain open across `Matlab::call`. Persistent read-only
+views borrow their handle and the invocation lifetime, not the context
+reference. Persistent mutable views retain their context borrow.
 `Matlab::lock` returns a thread-bound `ModuleLock` guard whose destructor
 balances exactly one `mexLock`; raw manual unlock remains outside the safe API.
 Retired arrays are destroyed only when no workspace borrow or callback handoff
 is active. Dropping a workspace borrow never destroys arrays. The runtime
 releases its internal borrow before calling `mxDestroyArray`.
 
+`Inputs<'mex, N>` contains exactly `N` validated input views. `DynInputs<'mex>`
+keeps a variable count and offers `require::<N>()` for an explicit exact-count
+check. `Outputs<'mex, N>` requires exactly `N` explicit outputs; a dynamic
+`Outputs<'mex>` handler may accept a range. `requested()` excludes the optional
+`ans` slot. `set_first()` can fill that slot when no output was requested.
+All explicitly requested slots are checked before any output owner is passed
+to MATLAB.
+
 ## Workspace-borrow callback audit
 
 | Safe operation | During a live `WorkspaceValue` |
 |---|---|
 | `Matlab::call`, `eval`, `workspace_put` | `Busy`; also require `&mut Matlab` |
-| `Matlab::property`, `OwnedArray::property`, `ArrayMut::set_property` | `Busy`; accessors can run MATLAB code |
+| `Matlab::property`, `OwnedArray::property`, `Matlab::with_property` | `Busy`; accessors can run MATLAB code |
 | `MatFile::put`, `put_global`, `get`, `Variables::next` | `Busy`; object serialization/deserialization can run MATLAB code |
 | `MatFile::put_plain` | Allowed for validated primitive arrays |
 | Array inspection, constructors, duplication, MAT-file headers/directory/handle operations | Allowed; these do not invoke MATLAB user code |

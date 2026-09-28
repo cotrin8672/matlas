@@ -9,7 +9,7 @@ different Rust types with different lifetimes and drop behavior.
 
 - MATLAB with `matrix.h`, `mex.h`, and `mat.h`
 - Rust and a native C compiler supported by MATLAB
-- MATLAB R2024a/API 800 is the v0.9 validation target
+- MATLAB R2024a/API 800 is the v0.10 validation target
 
 Set `MATLABROOT` to the MATLAB installation. The build script links the
 versioned API libraries and compiles the C shim automatically.
@@ -28,8 +28,14 @@ fn run<'mex>(cx: &mut Matlab<'mex>, inputs: Inputs<'mex, 1>, out: &mut Outputs<'
 }
 ```
 
-Fixed input and output counts are checked before the handler runs. Omitting
-the const parameters keeps the existing variable-count API. `ArrayRef::to_text`
+Fixed input and output counts are checked before the handler runs. For a
+variable input count, use `DynInputs<'mex>` and
+`mex_entrypoint!(run, dynamic)`; `inputs.require::<N>()` checks and destructures
+an exact count when needed. Omitting the output const parameter keeps variable
+output counts. `Outputs::requested()` reports the explicit MATLAB request;
+`set_first()` also supports an optional first result in `ans` when that count
+is zero. Every explicitly requested output must be set before the handler
+returns. `ArrayRef::to_text`
 reads a character row or scalar MATLAB string; `logical_scalar` reads and
 creates MATLAB logical scalars. `call_array::<N>` returns a fixed number of
 callback outputs. `error_id!` validates static exception IDs at compile time;
@@ -38,6 +44,19 @@ ID without another `Result`. Import `ResultExt` to use `.with_id(id)`,
 `.context("description")`, and `.with_context(|| format!(...))` directly on
 fallible operations while preserving the original error. See the
 [v0.8 migration notes](docs/ERROR_HANDLING.md#migration-from-v07).
+
+### Migration from v0.9
+
+- Fixed input handlers use `Inputs<'mex, N>` with exactly `N` values. Variable
+  input handlers use `DynInputs<'mex>` and `mex_entrypoint!(run, dynamic)`.
+- `MatFile`, `Variables`, and `VariableInfos` now take only the invocation
+  lifetime; they no longer borrow the `Matlab` variable for their full lifetime.
+- `Error` fields are private. Read them through accessors, including
+  `matlab_error()` for a trapped callback's original identifier and message.
+- Replace `ArrayMut::set_property` with trapped `Matlab::with_property` and use
+  its returned object for value classes. Explicitly requested MEX output slots
+  must all be filled; use `set_first` to set optional `ans` when none was
+  requested.
 
 ### Migration from v0.8
 
@@ -95,7 +114,7 @@ fn save_waveform(cx: &mut Matlab<'_>) -> Result<()> {
 ## Status
 
 The old `rustmat` and `rustmex` APIs are intentionally not dependencies.
-Windows is the supported target; v0.9 was validated on R2024a. The
+Windows is the supported target; v0.10 was validated on R2024a. The
 R2025a/API-800 audit covers all 178 published C functions: safe operations
 use lifetime-aware types, aliases use a more general
 safe operation, and ownership-adopting or non-trapping callback and error

@@ -22,7 +22,7 @@ pub use array::{
     ArrayMut, ArrayRef, Class, Complex, Numeric, OwnedArray, PersistentArray, PlainArrayRef,
     SparseIndices, SparseNumeric, UninitNumeric,
 };
-pub use error::{Error, ErrorId, ErrorKind, MatError, Result, ResultExt};
+pub use error::{Error, ErrorId, ErrorKind, MatError, MatlabErrorInfo, Result, ResultExt};
 
 /// Function-by-function coverage of the R2025a API-800 C headers.
 #[doc = include_str!("../docs/API_COVERAGE.md")]
@@ -205,6 +205,60 @@ impl<'mex> Matlab<'mex> {
             .ok_or_else(|| Error::new(ErrorKind::Native, "get property", format!("{name:?}")))
     }
 
+    /// Assign a public object property through MATLAB's trapping callback API.
+    /// Returns the updated object; value-class callers must use this result.
+    /// Handle-class setters may mutate their object even if they then throw.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an out-of-bounds index, an invalid property name,
+    /// an active workspace borrow, or a trapped MATLAB assignment exception.
+    pub fn with_property(
+        &mut self,
+        object: ArrayRef<'_>,
+        index: usize,
+        name: &CStr,
+        value: ArrayRef<'_>,
+    ) -> Result<OwnedArray<'mex>> {
+        runtime::require_unborrowed("set property")?;
+        if index >= object.numel() {
+            return Err(Error::bounds("set property", index, object.numel()));
+        }
+        let name = name.to_str().map_err(|_| {
+            Error::new(ErrorKind::InvalidInput, "set property", "name is not UTF-8")
+        })?;
+        let dot = self.char_row(".")?;
+        let property = self.char_row(name)?;
+        let subscript = if object.numel() == 1 {
+            let [subscript] = self.call_array(c"substruct", &[dot.as_ref(), property.as_ref()])?;
+            subscript
+        } else {
+            let paren = self.char_row("()")?;
+            let mut indices = self.cell(&[1, 1])?;
+            let index = u64::try_from(index + 1)
+                .map_err(|_| Error::new(ErrorKind::Bounds, "set property", "index is too large"))?;
+            drop(
+                indices
+                    .as_mut()
+                    .replace_cell(0, Some(self.scalar(index)?))?,
+            );
+            let [subscript] = self.call_array(
+                c"substruct",
+                &[
+                    paren.as_ref(),
+                    indices.as_ref(),
+                    dot.as_ref(),
+                    property.as_ref(),
+                ],
+            )?;
+            subscript
+        };
+        let [updated] = self
+            .call_array(c"subsasgn", &[object, subscript.as_ref(), value])
+            .map_err(|error| error.context("set property"))?;
+        Ok(updated)
+    }
+
     /// Return the name by which MATLAB invoked the current MEX function.
     pub fn function_name(&self) -> &CStr {
         unsafe { CStr::from_ptr(ffi::matrust_function_name()) }
@@ -222,7 +276,7 @@ impl<'mex> Matlab<'mex> {
         let status = unsafe { ffi::matrust_printf(text.as_ptr()) };
         (status >= 0)
             .then_some(())
-            .ok_or_else(|| Error::native_status("printf", status))
+            .ok_or_else(|| Error::from_native_status("printf", status))
     }
 
     /// Issue a MATLAB warning with an identifier and literal message.
@@ -322,7 +376,7 @@ impl<'mex> Matlab<'mex> {
         if status == 0 {
             Ok(())
         } else {
-            Err(Error::native_status("put workspace variable", status))
+            Err(Error::from_native_status("put workspace variable", status))
         }
     }
 
@@ -467,14 +521,18 @@ fn callback_error(raw: NonNull<ffi::RawArray>, operation: &'static str, fallback
         .property(0, c"message")
         .and_then(|value| value.as_ref().to_utf8())
         .ok();
-    let detail = match (identifier, message) {
+    let detail = match (identifier.as_deref(), message.as_deref()) {
         (Some(identifier), Some(message)) if !identifier.is_empty() => {
             format!("{identifier}: {message}")
         }
-        (_, Some(message)) => message,
+        (_, Some(message)) => message.to_owned(),
+        (Some(identifier), None) if !identifier.is_empty() => {
+            format!("{identifier}: {fallback}")
+        }
         _ => fallback,
     };
     Error::new(ErrorKind::Callback, operation, detail)
+        .with_matlab_error(MatlabErrorInfo::new(identifier, message))
 }
 
 /// MATLAB's three workspace namespaces.
@@ -644,15 +702,12 @@ impl CallInput<'_> {
     }
 }
 
-/// Read-only MEX input arguments owned by MATLAB.
-///
-/// A fixed `N` is checked before the handler runs. The default const value
-/// reserves `usize::MAX` for handlers with a variable input count.
-pub struct Inputs<'mex, const N: usize = { usize::MAX }> {
-    values: Vec<ArrayRef<'mex>>,
+/// Exactly `N` read-only MEX inputs, checked before the handler runs.
+pub struct Inputs<'mex, const N: usize> {
+    values: [ArrayRef<'mex>; N],
 }
 impl<'mex, const N: usize> Inputs<'mex, N> {
-    fn new(values: Vec<ArrayRef<'mex>>) -> Self {
+    fn new(values: [ArrayRef<'mex>; N]) -> Self {
         Self { values }
     }
     /// Return the number of input arguments.
@@ -689,11 +744,50 @@ impl<'mex, const N: usize> Inputs<'mex, N> {
     }
 
     /// Consume fixed-arity inputs as an array for destructuring.
-    ///
-    /// The entrypoint checks the actual MATLAB argument count before calling
-    /// a handler with fixed arity.
     pub fn into_array(self) -> [ArrayRef<'mex>; N] {
-        std::array::from_fn(|index| self.values[index])
+        self.values
+    }
+}
+
+/// Read-only MEX inputs with a variable argument count.
+/// Use `mex_entrypoint!(handler, dynamic)` for a dynamic handler.
+pub struct DynInputs<'mex> {
+    values: Vec<ArrayRef<'mex>>,
+}
+impl<'mex> DynInputs<'mex> {
+    fn new(values: Vec<ArrayRef<'mex>>) -> Self {
+        Self { values }
+    }
+    /// Return the number of input arguments.
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+    /// Test whether there are no input arguments.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+    /// Borrow an input argument by index.
+    pub fn get(&self, index: usize) -> Option<ArrayRef<'mex>> {
+        self.values.get(index).copied()
+    }
+    /// Iterate over every input argument.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = ArrayRef<'mex>> + '_ {
+        self.values.iter().copied()
+    }
+    /// Require exactly `N` inputs and return them in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if the argument count differs from `N`.
+    pub fn require<const N: usize>(&self) -> Result<[ArrayRef<'mex>; N]> {
+        if self.len() != N {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "MEX inputs",
+                format!("expected {N} inputs, got {}", self.len()),
+            ));
+        }
+        Ok(std::array::from_fn(|index| self.values[index]))
     }
 }
 
@@ -702,21 +796,27 @@ impl<'mex, const N: usize> Inputs<'mex, N> {
 /// A fixed `N` is checked before the handler runs. The default const value
 /// reserves `usize::MAX` for handlers with a variable output count.
 pub struct Outputs<'mex, const N: usize = { usize::MAX }> {
+    requested: usize,
     values: Vec<Option<OwnedArray<'mex>>>,
 }
 impl<'mex, const N: usize> Outputs<'mex, N> {
     fn new(count: usize) -> Self {
         Self {
-            values: (0..count).map(|_| None).collect(),
+            requested: count,
+            values: (0..count.max(1)).map(|_| None).collect(),
         }
     }
     /// Return the number of requested output slots.
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.requested
+    }
+    /// Return the number of outputs explicitly requested by MATLAB.
+    pub fn requested(&self) -> usize {
+        self.requested
     }
     /// Test whether MATLAB requested no outputs.
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.requested == 0
     }
     /// Require exactly `count` requested output slots.
     ///
@@ -733,17 +833,45 @@ impl<'mex, const N: usize> Outputs<'mex, N> {
         }
         Ok(())
     }
+    /// Require the requested output count to be within `range`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an input error if MATLAB requested an unsupported count.
+    pub fn require_range(&self, range: impl std::ops::RangeBounds<usize>) -> Result<()> {
+        if !range.contains(&self.requested) {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "MEX outputs",
+                format!("unsupported output count: {}", self.requested),
+            ));
+        }
+        Ok(())
+    }
     /// Transfer an owned array into an output slot.
     ///
     /// # Errors
     ///
     /// Returns an error if the index is out of bounds or the slot is already set.
     pub fn set(&mut self, index: usize, value: OwnedArray<'mex>) -> Result<()> {
-        let len = self.values.len();
+        if index >= self.requested {
+            return Err(Error::bounds("set output", index, self.requested));
+        }
+        self.set_slot(index, value)
+    }
+    /// Set the first output, including `ans` when no output was requested.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the first slot has already been set.
+    pub fn set_first(&mut self, value: OwnedArray<'mex>) -> Result<()> {
+        self.set_slot(0, value)
+    }
+    fn set_slot(&mut self, index: usize, value: OwnedArray<'mex>) -> Result<()> {
         let slot = self
             .values
             .get_mut(index)
-            .ok_or_else(|| Error::bounds("set output", index, len))?;
+            .expect("first or requested output slot");
         if slot.is_some() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -760,11 +888,26 @@ impl<'mex, const N: usize> Outputs<'mex, N> {
     ///
     /// Returns an error if the index is out of bounds.
     pub fn take(&mut self, index: usize) -> Result<Option<OwnedArray<'mex>>> {
-        let len = self.values.len();
+        if index >= self.requested {
+            return Err(Error::bounds("take output", index, self.requested));
+        }
         self.values
             .get_mut(index)
-            .ok_or_else(|| Error::bounds("take output", index, len))
+            .ok_or_else(|| Error::bounds("take output", index, self.requested))
             .map(Option::take)
+    }
+    fn validate(&self) -> Result<()> {
+        if let Some(index) = self.values[..self.requested]
+            .iter()
+            .position(Option::is_none)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "MEX outputs",
+                format!("requested output {index} was not set"),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -806,31 +949,36 @@ impl OpenMode {
     }
 }
 
-/// Owned `MATFile` handle tied to the creating MATLAB context.
-pub struct MatFile<'mex, 'ctx> {
+/// Owned `MATFile` handle tied to the current MEX invocation.
+///
+/// ```compile_fail
+/// use matlas::{MatFile, Matlab, OpenMode, Result};
+/// fn escape<'mex>(cx: &Matlab<'mex>) -> Result<MatFile<'static>> {
+///     MatFile::open(cx, "data.mat", OpenMode::Read)
+/// }
+/// ```
+pub struct MatFile<'mex> {
     raw: Option<NonNull<ffi::RawFile>>,
     mode: OpenMode,
-    _context: &'ctx Matlab<'mex>,
+    _brand: PhantomData<fn(&'mex mut ()) -> &'mex mut ()>,
+    _thread: PhantomData<Rc<()>>,
 }
-impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
+impl<'mex> MatFile<'mex> {
     /// Open a MAT-file with an explicit access mode.
     ///
     /// # Errors
     ///
     /// Returns an error for a non-Unicode/NUL-containing path or if MATLAB
     /// cannot open the file in the requested mode.
-    pub fn open(
-        context: &'ctx Matlab<'mex>,
-        path: impl AsRef<Path>,
-        mode: OpenMode,
-    ) -> Result<Self> {
+    pub fn open(_context: &Matlab<'mex>, path: impl AsRef<Path>, mode: OpenMode) -> Result<Self> {
         let path = path_cstring(path.as_ref())?;
         let raw = unsafe { ffi::matrust_mat_open(path.as_ptr(), mode.as_cstr().as_ptr()) };
         NonNull::new(raw)
             .map(|raw| Self {
                 raw: Some(raw),
                 mode,
-                _context: context,
+                _brand: PhantomData,
+                _thread: PhantomData,
             })
             .ok_or_else(|| Error::new(ErrorKind::Open, "open MAT-file", format!("{path:?}")))
     }
@@ -839,7 +987,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
     /// # Errors
     ///
     /// Returns an error for an invalid path or native open failure.
-    pub fn create(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
+    pub fn create(context: &Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         Self::open(context, path, OpenMode::Write(MatVersion::V7))
     }
     /// Create a MAT-file in a selected format.
@@ -848,7 +996,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
     ///
     /// Returns an error for an invalid path or native open failure.
     pub fn create_with_format(
-        context: &'ctx Matlab<'mex>,
+        context: &Matlab<'mex>,
         path: impl AsRef<Path>,
         version: MatVersion,
     ) -> Result<Self> {
@@ -1114,7 +1262,7 @@ impl<'mex, 'ctx> MatFile<'mex, 'ctx> {
         }
     }
 }
-impl Drop for MatFile<'_, '_> {
+impl Drop for MatFile<'_> {
     fn drop(&mut self) {
         if let Some(raw) = self.raw.take() {
             unsafe {
@@ -1220,19 +1368,19 @@ pub struct Named<T> {
     pub value: T,
 }
 /// Sequential iterator over complete variables in a MAT-file.
-pub struct Variables<'mex, 'ctx> {
-    file: MatFile<'mex, 'ctx>,
+pub struct Variables<'mex> {
+    file: MatFile<'mex>,
     remaining: usize,
     done: bool,
 }
-impl<'mex, 'ctx> Variables<'mex, 'ctx> {
+impl<'mex> Variables<'mex> {
     /// Open a file for sequential variable reading.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be opened, listed, or closed while
     /// preparing the sequential reader.
-    pub fn open(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(context: &Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         let mut directory = MatFile::open(context, &path, OpenMode::Read)?;
         let remaining = directory.variables()?.len();
         directory.close()?;
@@ -1251,7 +1399,7 @@ impl<'mex, 'ctx> Variables<'mex, 'ctx> {
         self.file.close()
     }
 }
-impl<'mex, 'ctx> Iterator for Variables<'mex, 'ctx> {
+impl<'mex> Iterator for Variables<'mex> {
     type Item = Result<Named<OwnedArray<'mex>>>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.done || self.remaining == 0 {
@@ -1294,19 +1442,19 @@ impl<'mex, 'ctx> Iterator for Variables<'mex, 'ctx> {
 }
 
 /// Sequential iterator over variable headers in a MAT-file.
-pub struct VariableInfos<'mex, 'ctx> {
-    file: MatFile<'mex, 'ctx>,
+pub struct VariableInfos<'mex> {
+    file: MatFile<'mex>,
     remaining: usize,
     done: bool,
 }
-impl<'mex, 'ctx> VariableInfos<'mex, 'ctx> {
+impl<'mex> VariableInfos<'mex> {
     /// Open a file for sequential metadata reading.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be opened, listed, or closed while
     /// preparing the sequential reader.
-    pub fn open(context: &'ctx Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(context: &Matlab<'mex>, path: impl AsRef<Path>) -> Result<Self> {
         let mut directory = MatFile::open(context, &path, OpenMode::Read)?;
         let remaining = directory.variables()?.len();
         directory.close()?;
@@ -1325,7 +1473,7 @@ impl<'mex, 'ctx> VariableInfos<'mex, 'ctx> {
         self.file.close()
     }
 }
-impl<'mex, 'ctx> Iterator for VariableInfos<'mex, 'ctx> {
+impl<'mex> Iterator for VariableInfos<'mex> {
     type Item = Result<Named<ArrayInfo<'mex>>>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.done || self.remaining == 0 {
@@ -1385,10 +1533,16 @@ fn path_cstring(path: &Path) -> Result<CString> {
     CString::new(text).map_err(|_| Error::new(ErrorKind::InvalidInput, "path", "path contains NUL"))
 }
 
-/// Export a MEX entrypoint for `fn(&mut Matlab, Inputs, &mut Outputs) -> Result<()>`.
+/// Export a MEX entrypoint for fixed inputs, or use `dynamic` for [`DynInputs`].
 #[macro_export]
 macro_rules! mex_entrypoint {
     ($handler:path) => {
+        $crate::mex_entrypoint!(@dispatch $handler, dispatch);
+    };
+    ($handler:path, dynamic) => {
+        $crate::mex_entrypoint!(@dispatch $handler, dispatch_dynamic);
+    };
+    (@dispatch $handler:path, $dispatch:ident) => {
         #[used]
         #[no_mangle]
         pub static matrust_mex_link: unsafe extern "C" fn() = $crate::__private::matrust_mex_anchor;
@@ -1404,7 +1558,7 @@ macro_rules! mex_entrypoint {
             message_len: usize,
         ) -> i32 {
             unsafe {
-                $crate::__private::dispatch(
+                $crate::__private::$dispatch(
                     $handler,
                     nlhs,
                     plhs,

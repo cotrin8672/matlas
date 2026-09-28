@@ -69,10 +69,11 @@ point implemented by `mex_entrypoint!`, not an API function called by users.
 | Safe | `mxCreateCellArray`, `mxCreateStructArray` | `Matlab::cell`, `structure` |
 | Alias | `mxCreateCellMatrix`, `mxCreateStructMatrix` | the same constructors with `[m, n]`; exact constructors are raw |
 | Safe | `mxCreateSparse`, `mxGetNzmax`, `mxGetIr`, `mxGetJc` | `Matlab::sparse`, `ArrayRef::sparse_indices`, `sparse_data` |
-| Safe | `mxGetCell`, `mxSetCell` | borrowed `cell`/`cell_mut` and ownership-transferring `replace_cell` |
+| Safe | `mxGetCell`, `mxSetCell` | borrowed `cell`/`cell_mut` and ownership-transferring `replace_cell`; displaced children of persistent arrays are copied before return |
 | Safe | `mxGetNumberOfFields`, `mxGetFieldNameByNumber`, `mxGetFieldNumber`, `mxGetFieldByNumber`, `mxAddField`, `mxRemoveField`, `mxSetFieldByNumber` | safe struct access and replacement methods |
 | Alias | `mxGetField`, `mxSetField` | name-based `field` and `replace_field`; exact raw shims are exported |
-| Safe | `mxGetProperty`, `mxSetProperty` | `Matlab::property`, `OwnedArray::property`, `ArrayMut::set_property` |
+| Safe | `mxGetProperty` | `Matlab::property`, `OwnedArray::property` |
+| Raw | `mxSetProperty` | void native call cannot report setter exceptions; use trapped `Matlab::with_property` for MATLAB assignment |
 | Safe | `mxSetDimensions`, `mxSetFromGlobalWS`, `mxSetUserBits`, `mxMakeArrayReal`, `mxMakeArrayComplex` | validated `reshape` and explicit owned-array mutation methods |
 | Raw | `mxSetM`, `mxSetN`, `mxSetClassName` | can invalidate shape/class invariants; `reshape` is the safe alternative |
 | Raw | `mxSetData`, `mxSetPr`, `mxSetDoubles`, `mxSetSingles`, `mxSetInt8s`, `mxSetUint8s`, `mxSetInt16s`, `mxSetUint16s`, `mxSetInt32s`, `mxSetUint32s`, `mxSetInt64s`, `mxSetUint64s` | pointer ownership adoption cannot be inferred by Rust |

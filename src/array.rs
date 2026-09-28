@@ -183,6 +183,7 @@ impl<'a> PlainArrayRef<'a> {
 /// An exclusive array view. Child and data borrows are tied to each method call.
 pub struct ArrayMut<'a, 'mex> {
     raw: NonNull<ffi::RawArray>,
+    persistent_storage: bool,
     _borrow: PhantomData<&'a mut ffi::RawArray>,
     _brand: PhantomData<fn(&'mex mut ()) -> &'mex mut ()>,
     _thread: PhantomData<Rc<()>>,
@@ -215,6 +216,7 @@ impl<'mex> OwnedArray<'mex> {
     pub fn as_mut(&mut self) -> ArrayMut<'_, 'mex> {
         ArrayMut {
             raw: self.raw,
+            persistent_storage: false,
             _borrow: PhantomData,
             _brand: PhantomData,
             _thread: PhantomData,
@@ -297,7 +299,7 @@ impl<'mex> OwnedArray<'mex> {
             )
         };
         if status != 0 {
-            return Err(Error::native_status("reshape", status));
+            return Err(Error::from_native_status("reshape", status));
         }
         Ok(())
     }
@@ -322,7 +324,7 @@ impl<'mex> OwnedArray<'mex> {
             return Err(Error::type_mismatch("make real", "numeric", self.as_ref()));
         }
         if unsafe { ffi::matrust_array_make_real(self.raw.as_ptr()) } == 0 {
-            return Err(Error::native_status("make real", 0));
+            return Err(Error::from_native_status("make real", 0));
         }
         Ok(())
     }
@@ -341,7 +343,7 @@ impl<'mex> OwnedArray<'mex> {
             ));
         }
         if unsafe { ffi::matrust_array_make_complex(self.raw.as_ptr()) } == 0 {
-            return Err(Error::native_status("make complex", 0));
+            return Err(Error::from_native_status("make complex", 0));
         }
         Ok(())
     }
@@ -361,16 +363,37 @@ pub struct PersistentArray {
 }
 impl PersistentArray {
     /// Borrow the persistent array during the current MEX invocation.
+    /// The view borrows the handle, but does not keep the context borrowed.
+    ///
+    /// ```compile_fail
+    /// use matlas::{ArrayRef, Matlab, PersistentArray};
+    /// fn escape<'mex>(cx: &Matlab<'mex>, saved: &PersistentArray) -> ArrayRef<'static> {
+    ///     saved.as_ref(cx).unwrap()
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use matlas::{Matlab, PersistentArray};
+    /// fn remove_while_borrowed<'mex>(cx: &mut Matlab<'mex>, saved: PersistentArray) {
+    ///     let view = saved.as_ref(cx).unwrap();
+    ///     drop(saved);
+    ///     let _ = view.numel();
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
     /// Returns an error if the handle is stale.
-    pub fn as_ref<'a, 'mex>(&'a self, _context: &'a Matlab<'mex>) -> Result<ArrayRef<'a>> {
+    pub fn as_ref<'view, 'mex>(&'view self, _context: &Matlab<'mex>) -> Result<ArrayRef<'view>>
+    where
+        'mex: 'view,
+    {
         let raw = crate::runtime::persistent(self.slot, self.generation)?;
         Ok(unsafe { ArrayRef::from_raw(raw) })
     }
 
     /// Exclusively borrow the persistent array during the current MEX invocation.
+    /// Displaced cell and field values are returned as temporary deep copies.
     ///
     /// # Errors
     ///
@@ -382,6 +405,7 @@ impl PersistentArray {
         let raw = crate::runtime::persistent(self.slot, self.generation)?;
         Ok(ArrayMut {
             raw,
+            persistent_storage: true,
             _borrow: PhantomData,
             _brand: PhantomData,
             _thread: PhantomData,
@@ -978,6 +1002,34 @@ impl<'a> ArrayRef<'a> {
 }
 
 impl<'a, 'mex> ArrayMut<'a, 'mex> {
+    fn copy_displaced(&self, old: *mut ffi::RawArray) -> Result<Option<OwnedArray<'mex>>> {
+        if !self.persistent_storage {
+            return Ok(None);
+        }
+        NonNull::new(old)
+            .map(|old| {
+                let copy = unsafe { ffi::matrust_array_duplicate(old.as_ptr()) };
+                NonNull::new(copy)
+                    .map(|copy| unsafe { OwnedArray::from_raw(copy) })
+                    .ok_or_else(|| Error::allocation("duplicate persistent child"))
+            })
+            .transpose()
+    }
+
+    fn finish_displaced(
+        &self,
+        old: *mut ffi::RawArray,
+        copy: Option<OwnedArray<'mex>>,
+    ) -> Option<OwnedArray<'mex>> {
+        let old = NonNull::new(old).map(|old| unsafe { OwnedArray::from_raw(old) });
+        if self.persistent_storage {
+            drop(old);
+            copy
+        } else {
+            old
+        }
+    }
+
     /// Reborrow this exclusive view as read-only.
     pub fn as_ref(&self) -> ArrayRef<'_> {
         unsafe { ArrayRef::from_raw(self.raw) }
@@ -1132,13 +1184,15 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
         let raw = unsafe { ffi::matrust_cell_get(self.raw.as_ptr(), index) };
         Ok(NonNull::new(raw).map(|raw| ArrayMut {
             raw,
+            persistent_storage: self.persistent_storage,
             _borrow: PhantomData,
             _brand: PhantomData,
             _thread: PhantomData,
         }))
     }
 
-    /// Replace a cell, consuming the new owner and returning the previous owner.
+    /// Replace a cell, consuming the new owner and returning the previous value.
+    /// A child of persistent storage is duplicated before it is returned.
     ///
     /// # Errors
     ///
@@ -1152,12 +1206,14 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
         self.as_ref()
             .check_index("cell", index, self.as_ref().is_cell())?;
         let old = unsafe { ffi::matrust_cell_get(self.raw.as_ptr(), index) };
+        let copy = self.copy_displaced(old)?;
         let new = value.map_or(std::ptr::null_mut(), OwnedArray::into_raw);
         unsafe { ffi::matrust_cell_set(self.raw.as_ptr(), index, new) };
-        Ok(NonNull::new(old).map(|raw| unsafe { OwnedArray::from_raw(raw) }))
+        Ok(self.finish_displaced(old, copy))
     }
 
-    /// Replace a named structure field and return its previous owner.
+    /// Replace a named structure field and return its previous value.
+    /// A child of persistent storage is duplicated before it is returned.
     ///
     /// # Errors
     ///
@@ -1176,7 +1232,8 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
         self.replace_field_by_number(index, field, value)
     }
 
-    /// Replace a numbered structure field and return its previous owner.
+    /// Replace a numbered structure field and return its previous value.
+    /// A child of persistent storage is duplicated before it is returned.
     ///
     /// # Errors
     ///
@@ -1195,9 +1252,10 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
             return Err(Error::bounds("field", field, fields));
         }
         let old = unsafe { ffi::matrust_struct_get(self.raw.as_ptr(), index, field as i32) };
+        let copy = self.copy_displaced(old)?;
         let new = value.map_or(std::ptr::null_mut(), OwnedArray::into_raw);
         unsafe { ffi::matrust_struct_set(self.raw.as_ptr(), index, field as i32, new) };
-        Ok(NonNull::new(old).map(|raw| unsafe { OwnedArray::from_raw(raw) }))
+        Ok(self.finish_displaced(old, copy))
     }
 
     /// Add a field to a structure array and return its field number.
@@ -1239,29 +1297,20 @@ impl<'a, 'mex> ArrayMut<'a, 'mex> {
             return Err(Error::bounds("remove field", field, fields));
         }
         for index in 0..self.as_ref().numel() {
-            drop(self.replace_field_by_number(index, field, None)?);
+            let old = unsafe { ffi::matrust_struct_get(self.raw.as_ptr(), index, field as i32) };
+            unsafe {
+                ffi::matrust_struct_set(
+                    self.raw.as_ptr(),
+                    index,
+                    field as i32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if let Some(old) = NonNull::new(old) {
+                unsafe { crate::runtime::destroy_or_defer(old) };
+            }
         }
         unsafe { ffi::matrust_struct_remove_field(self.raw.as_ptr(), field as i32) };
-        Ok(())
-    }
-
-    /// Assign a public object property. MATLAB copies `value`; its ownership
-    /// remains with Rust and is never transferred into the object.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an out-of-bounds index or active workspace borrow.
-    /// Object and property errors are handled by native `mxSetProperty`, which
-    /// has no status return; see
-    /// [`crate::error_handling`].
-    pub fn set_property(&mut self, index: usize, name: &CStr, value: ArrayRef<'_>) -> Result<()> {
-        crate::runtime::require_unborrowed("set property")?;
-        if index >= self.as_ref().numel() {
-            return Err(Error::bounds("set property", index, self.as_ref().numel()));
-        }
-        unsafe {
-            ffi::matrust_property_set(self.raw.as_ptr(), index, name.as_ptr(), value.as_ptr())
-        };
         Ok(())
     }
 }

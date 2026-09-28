@@ -250,7 +250,74 @@ for command = 38:40
 end
 evalin('base', 'clear matlas_drop_count matlas_handoff_input');
 fprintf('MATLAS_V09_PASS strict scalar; property setter; deferred destruction\n');
-fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.9\n', checks);
+fprintf('MATLAS_STAGE trapped_property_setter\n');
+assignin('base', 'matlas_setter_calls', 0);
+assert(matlas_integration(41, 3, MatlasThrowingSetter) == 0);
+assert(evalin('base', 'matlas_setter_calls') == 1);
+evalin('base', 'clear matlas_setter_calls');
+objects(1) = MatlasTestObject;
+objects(1).Value = 11;
+objects(2) = MatlasTestObject;
+objects(2).Value = 33;
+assert(matlas_integration(42, 3, objects) == 0);
+assert(isequal([objects.Value], [11 33]));
+fprintf('MATLAS_PROPERTY_SETTER_PASS caught exception; returned value-class array\n');
+fprintf('MATLAS_STAGE persistent_child_replacement\n');
+for kind = 0:2
+    assert(matlas_integration(43, 3, kind) == 0);
+    assert(matlas_integration(44, 3, kind, 17) == 0);
+    assert(matlas_integration(45, 3, kind) == 17);
+    assert(matlas_integration(44, 3, kind, 23) == 17);
+    assert(matlas_integration(45, 3, kind) == 23);
+    if kind == 1, assert(matlas_integration(46, 3) == 0); end
+    assert(matlas_integration(18, 3) == 0);
+end
+object = MatlasTestObject;
+object.Value = 17;
+assert(matlas_integration(43, 3, 0) == 0);
+assert(matlas_integration(44, 3, 0, object) == 0);
+replacement = MatlasTestObject;
+replacement.Value = 23;
+previous = matlas_integration(44, 3, 0, replacement);
+assert(previous.Value == 17);
+current = matlas_integration(45, 3, 0);
+assert(current.Value == 23);
+assert(matlas_integration(18, 3) == 0);
+assert(matlas_integration(43, 3, 0) == 0);
+assert(matlas_integration(44, 3, 0, MatlasPropertyProbe) == 0);
+previous = matlas_integration(44, 3, 0, MatlasPropertyProbe);
+assert(isa(previous, 'MatlasPropertyProbe'));
+assert(matlas_integration(18, 3) == 0);
+fprintf('MATLAS_PERSISTENT_CHILD_PASS cell; struct; nested cell; value and handle objects\n');
+fprintf('MATLAS_STAGE context_input_output_contracts\n');
+assert(matlas_integration(47, 3) == 42);
+contextFile = load('context.mat');
+assert(contextFile.x == 21 && contextFile.y == 42);
+assert(matlas_integration(16, 3, 21) == 0);
+assert(matlas_integration(48, 3) == 42);
+assert(matlas_integration(18, 3) == 0);
+clear ans;
+matlas_integration(49, 3);
+assert(exist('ans', 'var') == 1 && ans == 42);
+assert(matlas_integration(49, 3) == 42);
+matlas_integration(50, 3);
+try
+    missing = matlas_integration(50, 3); %#ok<NASGU>
+    error('matlas:test:expectedMissingOutput', 'Expected a missing output error');
+catch e
+    assert(strcmp(e.identifier, 'matlas:input:invalid'), e.message);
+    assert(contains(e.message, 'requested output 0 was not set'), e.message);
+end
+try
+    [first, second] = matlas_integration(51, 3); %#ok<ASGLU>
+    error('matlas:test:expectedMissingOutput', 'Expected a missing output error');
+catch e
+    assert(strcmp(e.identifier, 'matlas:input:invalid'), e.message);
+    assert(contains(e.message, 'requested output 1 was not set'), e.message);
+end
+assert(matlas_integration(52, 3) == 1);
+fprintf('MATLAS_API_CONTRACT_PASS context callback; persistent read; ans; requested outputs\n');
+fprintf('MATLAS_ALL_PASS %d array-direction checks; 5 formats; lifecycle/global/Unicode/workspace/persistent/lock-RAII/callbacks/v0.10\n', checks);
 end
 
 function verifyFormat(path, version)

@@ -150,7 +150,7 @@ pub(crate) fn persist(raw: NonNull<ffi::RawArray>) -> Result<(usize, u64)> {
     if register_exit {
         let status = unsafe { ffi::matrust_at_exit(at_exit) };
         if status != 0 {
-            return Err(Error::native_status("register MEX cleanup", status));
+            return Err(Error::from_native_status("register MEX cleanup", status));
         }
         RUNTIME.with(|runtime| runtime.borrow_mut().exit_registered = true);
     }

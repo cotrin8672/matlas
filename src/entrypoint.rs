@@ -1,5 +1,5 @@
 //! The only unsafe boundary in the public MEX entrypoint.
-use crate::{runtime, ArrayRef, Error, Inputs, Matlab, Outputs, Result};
+use crate::{runtime, ArrayRef, DynInputs, Error, Inputs, Matlab, Outputs, Result};
 use std::{
     ffi::c_char,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -11,7 +11,8 @@ extern "C" {
     pub fn matrust_mex_anchor();
 }
 
-pub type Handler = for<'mex> fn(&mut Matlab<'mex>, Inputs<'mex>, &mut Outputs<'mex>) -> Result<()>;
+pub type Handler =
+    for<'mex> fn(&mut Matlab<'mex>, DynInputs<'mex>, &mut Outputs<'mex>) -> Result<()>;
 
 /// Called only by `mex_entry.c` with MATLAB-owned input/output pointers.
 #[allow(clippy::too_many_arguments)]
@@ -19,6 +20,75 @@ pub unsafe fn dispatch<const INPUTS: usize, const OUTPUTS: usize>(
     handler: for<'mex> fn(
         &mut Matlab<'mex>,
         Inputs<'mex, INPUTS>,
+        &mut Outputs<'mex, OUTPUTS>,
+    ) -> Result<()>,
+    nlhs: i32,
+    plhs: *mut *mut crate::ffi::RawArray,
+    nrhs: i32,
+    prhs: *const *const crate::ffi::RawArray,
+    id: *mut c_char,
+    id_len: usize,
+    message: *mut c_char,
+    message_len: usize,
+) -> i32 {
+    unsafe {
+        dispatch_inner(
+            Some(INPUTS),
+            |context, values, outputs| {
+                let values = values.try_into().unwrap_or_else(|_| unreachable!());
+                handler(context, Inputs::new(values), outputs)
+            },
+            nlhs,
+            plhs,
+            nrhs,
+            prhs,
+            id,
+            id_len,
+            message,
+            message_len,
+        )
+    }
+}
+
+/// Called only by `mex_entry.c` for a handler with variable input arity.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn dispatch_dynamic<const OUTPUTS: usize>(
+    handler: for<'mex> fn(
+        &mut Matlab<'mex>,
+        DynInputs<'mex>,
+        &mut Outputs<'mex, OUTPUTS>,
+    ) -> Result<()>,
+    nlhs: i32,
+    plhs: *mut *mut crate::ffi::RawArray,
+    nrhs: i32,
+    prhs: *const *const crate::ffi::RawArray,
+    id: *mut c_char,
+    id_len: usize,
+    message: *mut c_char,
+    message_len: usize,
+) -> i32 {
+    unsafe {
+        dispatch_inner(
+            None,
+            |context, values, outputs| handler(context, DynInputs::new(values), outputs),
+            nlhs,
+            plhs,
+            nrhs,
+            prhs,
+            id,
+            id_len,
+            message,
+            message_len,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn dispatch_inner<const OUTPUTS: usize>(
+    expected_inputs: Option<usize>,
+    handler: impl for<'mex> FnOnce(
+        &mut Matlab<'mex>,
+        Vec<ArrayRef<'mex>>,
         &mut Outputs<'mex, OUTPUTS>,
     ) -> Result<()>,
     nlhs: i32,
@@ -57,12 +127,14 @@ pub unsafe fn dispatch<const INPUTS: usize, const OUTPUTS: usize>(
         for index in 0..nlhs {
             unsafe { plhs.add(index).write(std::ptr::null_mut()) };
         }
-        if INPUTS != usize::MAX && nrhs != INPUTS {
-            return Err(Error::new(
-                crate::ErrorKind::InvalidInput,
-                "MEX inputs",
-                format!("expected {INPUTS} inputs, got {nrhs}"),
-            ));
+        if let Some(expected) = expected_inputs {
+            if nrhs != expected {
+                return Err(Error::new(
+                    crate::ErrorKind::InvalidInput,
+                    "MEX inputs",
+                    format!("expected {expected} inputs, got {nrhs}"),
+                ));
+            }
         }
         if OUTPUTS != usize::MAX && nlhs != OUTPUTS {
             return Err(Error::new(
@@ -85,13 +157,21 @@ pub unsafe fn dispatch<const INPUTS: usize, const OUTPUTS: usize>(
             })?;
             values.push(unsafe { ArrayRef::from_raw(raw) });
         }
-        let inputs = Inputs::new(values);
         let mut outputs = Outputs::new(nlhs);
-        handler(&mut context, inputs, &mut outputs)?;
-        for index in 0..nlhs {
-            if let Some(value) = outputs.take(index)? {
-                unsafe { plhs.add(index).write(value.into_raw()) };
-            }
+        handler(&mut context, values, &mut outputs)?;
+        outputs.validate()?;
+        let first_set = outputs.values[0].is_some();
+        if nlhs == 0 && first_set && plhs.is_null() {
+            return Err(Error::new(
+                crate::ErrorKind::InvalidInput,
+                "MEX entrypoint",
+                "null first output pointer",
+            ));
+        }
+        let count = nlhs.max(usize::from(first_set));
+        for index in 0..count {
+            let value = outputs.values[index].take().expect("validated output");
+            unsafe { plhs.add(index).write(value.into_raw()) };
         }
         Ok::<(), Error>(())
     }));
